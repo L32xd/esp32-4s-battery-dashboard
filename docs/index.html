@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d2235">
+  <title>4S 电池实时监控</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="menuButton" class="icon-button" aria-label="打开导航" aria-expanded="true">☰</button>
+    <strong id="pageTitle">实时监控</strong>
+    <span class="demo-badge">模拟数据</span>
+  </header>
+
+  <div class="layout">
+    <aside id="sidebar" class="sidebar">
+      <button class="nav-link active" data-page="monitor">实时监控</button>
+      <button class="nav-link" data-page="records">RS485数据记录</button>
+    </aside>
+
+    <main class="main">
+      <section id="monitorPage" class="page active">
+        <article class="card overview-card">
+          <h1>实时概览</h1>
+          <div class="overview-grid">
+            <div class="gauge-wrap">
+              <div class="label">组内总电压</div>
+              <svg class="gauge" viewBox="0 0 300 175" aria-label="组内总电压仪表盘">
+                <path class="gauge-track" d="M35 145 A115 115 0 0 1 265 145"/>
+                <path id="gaugeValue" class="gauge-value" d="M35 145 A115 115 0 0 1 265 145"/>
+                <text x="35" y="164" class="gauge-limit">12</text>
+                <text x="250" y="164" class="gauge-limit">17</text>
+                <text id="voltageValue" x="150" y="121" class="gauge-number">--</text>
+                <text x="150" y="145" class="gauge-unit">V</text>
+              </svg>
+            </div>
+            <div class="metric time-metric">
+              <span>北京时间</span>
+              <strong id="beijingTime">--</strong>
+            </div>
+            <div class="metric status-metric">
+              <span>当前状态</span>
+              <strong id="statusText">--</strong>
+            </div>
+            <div class="metric cycle-metric">
+              <span>循环次数</span>
+              <strong id="cycleCount">0</strong>
+            </div>
+          </div>
+        </article>
+
+        <article class="card chart-card">
+          <div class="chart-head">
+            <div>
+              <h1>电压曲线</h1>
+              <h2>电压记录（每30秒）</h2>
+              <p>将鼠标移到采样点查看横纵坐标 · 曲线区域内滚轮缩放 · 按住鼠标拖动 · 双击复位</p>
+            </div>
+            <button id="resetZoom" class="action-button">复位</button>
+          </div>
+          <div id="chartWrap" class="chart-wrap">
+            <svg id="chart" viewBox="0 0 1000 410" preserveAspectRatio="none" aria-label="可缩放电压曲线"></svg>
+            <div id="tooltip" class="tooltip" hidden></div>
+          </div>
+        </article>
+      </section>
+
+      <section id="recordsPage" class="page">
+        <article class="card records-card">
+          <div class="records-head">
+            <div>
+              <h1>RS485采样数据</h1>
+              <p>最近120条采样记录（每30秒）</p>
+            </div>
+            <input id="searchInput" type="search" placeholder="搜索记录" aria-label="搜索记录">
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>采样时间</th><th>总电压(V)</th><th>当前状态</th><th>循环次数</th></tr></thead>
+              <tbody id="recordsBody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
