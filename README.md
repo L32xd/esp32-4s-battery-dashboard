@@ -27,6 +27,8 @@
 
 ## GitHub Pages 公网版
 
+公网访问地址：<https://l32xd.github.io/esp32-4s-battery-dashboard/>
+
 `docs/` 是可直接部署到 GitHub Pages 的静态展示版，采用与 FlowFuse Dashboard 一致的深色仪表盘布局。它包含相同的仪表、曲线交互和数据表，并在浏览器中每 30 秒生成一条模拟电压数据。
 
 公网版故意不读取 `.env` 和 OneNET 鉴权信息，避免将设备 API 密钥暴露到浏览器。推送到 `main` 分支后，`.github/workflows/pages.yml` 会自动发布 `docs/`。
@@ -34,3 +36,4 @@
 ## OneNET 配置
 
 复制 `.env.example` 为 `.env`，填入 OneNET 产品、设备和 API 鉴权信息。`.env` 已被 Git 忽略，不会提交到仓库。
+
