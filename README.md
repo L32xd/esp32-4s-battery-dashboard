@@ -29,9 +29,9 @@
 
 公网访问地址：<https://l32xd.github.io/esp32-4s-battery-dashboard/>
 
-`docs/` 是可直接部署到 GitHub Pages 的静态展示版，采用与 FlowFuse Dashboard 一致的深色仪表盘布局。它不再生成模拟电压，默认显示“等待第一条真实采样数据”。如需接入外部数据桥接，可调用 `window.pushBatterySample({timestamp, channels: {CH1, CH2, CH3}, statusText, cycleCount})`。
+`docs/` 是可直接部署到 GitHub Pages 的静态展示版，采用与 FlowFuse Dashboard 一致的深色仪表盘布局。它不生成模拟电压，会从 OneNET 查询 CH1、CH2、CH3 的真实属性，每 30 秒刷新一次。首次打开公网页面时，点击右上角“配置数据源”，粘贴 OneNET `Authorization`；鉴权只保存在当前浏览器的 localStorage，不会写入 GitHub。也可通过 `window.pushBatterySample({timestamp, channels: {CH1, CH2, CH3}, statusText, cycleCount})` 接入其他数据桥接。
 
-公网版故意不读取 `.env` 和 OneNET 鉴权信息，避免将设备 API 密钥暴露到浏览器。推送到 `main` 分支后，`.github/workflows/pages.yml` 会自动发布 `docs/`。
+公网版不读取仓库中的 `.env`，避免把设备 API 密钥提交到代码。推送到 `main` 分支后，`.github/workflows/pages.yml` 会自动发布 `docs/`。
 
 ## OneNET 配置
 
