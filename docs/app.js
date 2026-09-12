@@ -2,7 +2,9 @@
   'use strict';
 
   const SAMPLE_MS = 5_000;
-  const MAX_RECORDS = 120;
+  const MAX_RECORDS = 720;
+  const HISTORY_PAGE_SIZE = 100;
+  const HISTORY_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const plot = { left: 68, right: 980, top: 18, bottom: 360 };
   const colors = { CH1: '#29b6f6', CH2: '#42d392', CH3: '#ffa726' };
@@ -175,17 +177,133 @@
     };
   }
 
+  function restoreRecords() {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('rs485-history-v1') || '[]');
+      if (!Array.isArray(saved)) return;
+      records = saved.map(item => {
+        const values = Object.fromEntries(channels.map(channel => [channel, numberOrNull(item.values && item.values[channel])]));
+        const x = numberOrNull(item.x || item.timestamp || item.time);
+        return x !== null && channels.some(channel => values[channel] !== null)
+          ? { x, values, status: item.status || '--', cycleCount: item.cycleCount ?? '--' }
+          : null;
+      }).filter(Boolean).sort((a, b) => a.x - b.x).slice(-MAX_RECORDS);
+      if (records.length) {
+        resetZoom();
+        updateDashboard(records[records.length - 1]);
+        renderTable();
+      }
+    } catch (_) {
+      records = [];
+    }
+  }
+
+  function persistRecords() {
+    try {
+      window.localStorage.setItem('rs485-history-v1', JSON.stringify(records));
+    } catch (_) {
+      // 浏览器禁用 localStorage 时仍保留当前页面的实时曲线。
+    }
+  }
+
+  function upsertRecord(record) {
+    const existing = records.find(item => item.x === record.x);
+    if (existing) {
+      existing.values = { ...existing.values, ...record.values };
+      if (record.status && record.status !== '--') existing.status = record.status;
+      if (record.cycleCount !== undefined && record.cycleCount !== '--') existing.cycleCount = record.cycleCount;
+    } else {
+      records.push(record);
+    }
+    records.sort((a, b) => a.x - b.x);
+    if (records.length > MAX_RECORDS) records = records.slice(-MAX_RECORDS);
+  }
+
   function pushBatterySample(sample) {
     const record = normalizeSample(sample);
     if (!record) return false;
-    const duplicate = records.length && records[records.length - 1].x === record.x;
-    if (duplicate) records[records.length - 1] = record;
-    else records.push(record);
-    if (records.length > MAX_RECORDS) records = records.slice(-MAX_RECORDS);
+    upsertRecord(record);
+    persistRecords();
     if (!zoomed) resetZoom();
     updateDashboard(record);
     renderTable();
     return true;
+  }
+
+  function mergeHistoricalSamples(samples) {
+    samples.forEach(sample => {
+      const record = normalizeSample(sample);
+      if (record) upsertRecord(record);
+    });
+    if (!records.length) return;
+    persistRecords();
+    if (!zoomed) resetZoom();
+    updateDashboard(records[records.length - 1]);
+    renderTable();
+  }
+
+  async function fetchPropertyHistory(identifier) {
+    const results = [];
+    const endTime = Date.now();
+    const startTime = endTime - HISTORY_LOOKBACK_MS;
+    const base = String(dataConfig.apiBase || defaultDataConfig.apiBase).replace(/\/$/, '');
+    for (let offset = 0; offset < MAX_RECORDS; offset += HISTORY_PAGE_SIZE) {
+      const query = new URLSearchParams({
+        product_id: dataConfig.productId,
+        device_name: dataConfig.deviceName,
+        identifier,
+        start_time: String(startTime),
+        end_time: String(endTime),
+        sort: '2',
+        offset: String(offset),
+        limit: String(HISTORY_PAGE_SIZE)
+      });
+      const response = await fetch(`${base}/thingmodel/query-device-property-history?${query.toString()}`, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { Accept: 'application/json', authorization: dataConfig.authorization }
+      });
+      const body = await response.json();
+      if (!response.ok || body.code !== 0 || !body.data || !Array.isArray(body.data.list)) {
+        throw new Error(body.msg || `HTTP ${response.status}`);
+      }
+      const list = body.data.list;
+      results.push(...list);
+      if (list.length < HISTORY_PAGE_SIZE) break;
+    }
+    return results.slice(0, MAX_RECORDS);
+  }
+
+  async function fetchOneNetHistory() {
+    if (!dataConfig.authorization) return;
+    setLiveState('正在加载历史…');
+    try {
+      const histories = await Promise.all(channels.map(async channel => ({
+        channel,
+        list: await fetchPropertyHistory(channel)
+      })));
+      const merged = new Map();
+      histories.forEach(({ channel, list }) => {
+        list.forEach(item => {
+          const timestamp = numberOrNull(item.time);
+          const value = numberOrNull(item.value);
+          if (timestamp === null || value === null) return;
+          const record = merged.get(timestamp) || {
+            timestamp,
+            channels: {},
+            statusText: '--',
+            cycleCount: '--'
+          };
+          record.channels[channel] = value;
+          merged.set(timestamp, record);
+        });
+      });
+      mergeHistoricalSamples([...merged.values()].sort((a, b) => a.timestamp - b.timestamp));
+      if (records.length) setLiveState(`已加载 ${records.length} 条历史记录`);
+    } catch (error) {
+      // 历史查询失败不应阻止最新值轮询/本地历史显示
+      setLiveState('历史加载失败，继续实时读取', true);
+    }
   }
 
   // Node-RED 或其他数据桥接可以调用 window.pushBatterySample(sample) 注入真实数据。
@@ -439,15 +557,23 @@
   el.chart.addEventListener('pointercancel', onPointerUp);
   el.chart.addEventListener('dblclick', resetZoom);
 
-  resetZoom();
-  updateDashboard(null);
-  renderTable();
+  restoreRecords();
+  if (!records.length) {
+    resetZoom();
+    updateDashboard(null);
+    renderTable();
+  }
   updateClock();
   setInterval(updateClock, 1000);
-  fetchOneNetSample();
-  setInterval(fetchOneNetSample, SAMPLE_MS);
 
   if (Array.isArray(window.__RS485_INITIAL_DATA__)) {
     window.__RS485_INITIAL_DATA__.forEach(pushBatterySample);
   }
+
+  if (dataConfig.authorization) {
+    fetchOneNetHistory().then(fetchOneNetSample, fetchOneNetSample);
+  } else {
+    fetchOneNetSample();
+  }
+  setInterval(fetchOneNetSample, SAMPLE_MS);
 })();
