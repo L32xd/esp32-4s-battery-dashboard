@@ -7,6 +7,14 @@
   const plot = { left: 68, right: 980, top: 18, bottom: 360 };
   const colors = { CH1: '#29b6f6', CH2: '#42d392', CH3: '#ffa726' };
   const channels = ['CH1', 'CH2', 'CH3'];
+  const CONFIG_STORAGE_KEY = 'rs485-onenet-config-v1';
+  const defaultDataConfig = {
+    apiBase: 'https://iot-api.heclouds.com',
+    productId: '025rYnzKk0',
+    deviceName: '4S',
+    authorization: ''
+  };
+  let dataConfig = loadDataConfig();
 
   const el = {
     menu: document.querySelector('#menuButton'),
@@ -18,6 +26,8 @@
     status: document.querySelector('#statusText'),
     cycles: document.querySelector('#cycleCount'),
     dataState: document.querySelector('#dataState'),
+    liveBadge: document.querySelector('#liveBadge'),
+    configButton: document.querySelector('#configButton'),
     chart: document.querySelector('#chart'),
     chartWrap: document.querySelector('#chartWrap'),
     chartEmpty: document.querySelector('#chartEmpty'),
@@ -51,6 +61,93 @@
     if (value === null || value === undefined || value === '') return null;
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
+  }
+
+  function loadDataConfig() {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(CONFIG_STORAGE_KEY) || '{}');
+      return { ...defaultDataConfig, ...saved };
+    } catch (_) {
+      return { ...defaultDataConfig };
+    }
+  }
+
+  function setLiveState(text, error = false) {
+    el.liveBadge.textContent = text;
+    el.liveBadge.style.color = error ? '#ff9e9e' : '';
+    el.liveBadge.style.borderColor = error ? '#8f4650' : '';
+  }
+
+  function readProperty(properties, names) {
+    for (const name of names) {
+      const item = properties[name];
+      const value = numberOrNull(item && item.value);
+      if (value !== null) return { value, time: numberOrNull(item.time) };
+    }
+    return { value: null, time: null };
+  }
+
+  function boolProperty(item) {
+    return Boolean(item && (item.value === true || item.value === 'true' || item.value === 1 || item.value === '1'));
+  }
+
+  async function fetchOneNetSample() {
+    if (!dataConfig.authorization) {
+      setLiveState('请先配置鉴权');
+      return;
+    }
+
+    setLiveState('正在读取…');
+    const base = String(dataConfig.apiBase || defaultDataConfig.apiBase).replace(/\/$/, '');
+    const query = new URLSearchParams({ product_id: dataConfig.productId, device_name: dataConfig.deviceName });
+    try {
+      const response = await fetch(`${base}/thingmodel/query-device-property?${query.toString()}`, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { Accept: 'application/json', authorization: dataConfig.authorization }
+      });
+      const body = await response.json();
+      if (!response.ok || body.code !== 0 || !Array.isArray(body.data)) {
+        throw new Error(body.msg || `HTTP ${response.status}`);
+      }
+
+      const properties = Object.fromEntries(body.data.map(item => [item.identifier, item]));
+      const values = Object.fromEntries(channels.map(channel => {
+        const item = readProperty(properties, [channel, channel.toLowerCase(), `${channel}_V`]);
+        return [channel, item];
+      }));
+      const valid = Object.values(values).filter(item => item.value !== null);
+      if (!valid.length) throw new Error('云端暂无 CH1/CH2/CH3 数据');
+
+      const sampleTime = Math.max(...valid.map(item => item.time || 0), Date.now());
+      const relayOn = boolProperty(properties.ralay_status);
+      pushBatterySample({
+        timestamp: sampleTime,
+        channels: Object.fromEntries(channels.map(channel => [channel, values[channel].value])),
+        statusText: relayOn ? '放电（继电器1～3全部吸合）' : '充电（继电器1～3全部断开）',
+        cycleCount: numberOrNull(properties.cycle_count && properties.cycle_count.value) ?? '--'
+      });
+      setLiveState(`已连接 · ${beijingTime.format(new Date())}`);
+    } catch (error) {
+      setLiveState(`读取失败 · ${error.message}`, true);
+    }
+  }
+
+  function configureDataSource() {
+    const authorization = window.prompt(
+      '粘贴 OneNET Authorization（仅保存在本浏览器，不会写入 GitHub）：',
+      dataConfig.authorization
+    );
+    if (authorization === null) return;
+    dataConfig = { ...dataConfig, authorization: authorization.trim() };
+    if (dataConfig.authorization) {
+      window.localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(dataConfig));
+      fetchOneNetSample();
+    } else {
+      window.localStorage.removeItem(CONFIG_STORAGE_KEY);
+      setLiveState('请先配置鉴权');
+      updateDashboard(null);
+    }
   }
 
   function normalizeSample(sample) {
@@ -322,6 +419,7 @@
     const collapsed = el.sidebar.classList.toggle('collapsed');
     el.menu.setAttribute('aria-expanded', String(!collapsed));
   });
+  el.configButton.addEventListener('click', configureDataSource);
   document.querySelectorAll('.nav-link').forEach(button => button.addEventListener('click', () => switchPage(button.dataset.page)));
   el.search.addEventListener('input', renderTable);
   el.reset.addEventListener('click', resetZoom);
@@ -337,6 +435,8 @@
   renderTable();
   updateClock();
   setInterval(updateClock, 1000);
+  fetchOneNetSample();
+  setInterval(fetchOneNetSample, SAMPLE_MS);
 
   if (Array.isArray(window.__RS485_INITIAL_DATA__)) {
     window.__RS485_INITIAL_DATA__.forEach(pushBatterySample);
