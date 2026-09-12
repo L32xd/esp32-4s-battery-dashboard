@@ -1,6 +1,6 @@
 # ESP32 4S 电池可视化
 
-基于 Node-RED 5.0.6 和 FlowFuse Dashboard 1.31.0。本地页面每 30 秒查询一次 OneNET 设备最新属性，展示 RS485 盒子的 CH1、CH2、CH3 三路真实电压；北京时间每秒刷新。
+基于 Node-RED 5.0.6 和 FlowFuse Dashboard 1.31.0。本地页面每 5 秒查询一次 OneNET 设备最新属性，展示 RS485 盒子的 CH1、CH2、CH3 三路真实电压；北京时间每秒刷新。
 
 ## 本地启动
 
@@ -29,7 +29,7 @@
 
 公网访问地址：<https://l32xd.github.io/esp32-4s-battery-dashboard/>
 
-`docs/` 是可直接部署到 GitHub Pages 的静态展示版，采用与 FlowFuse Dashboard 一致的深色仪表盘布局。它不生成模拟电压，会从 OneNET 查询 CH1、CH2、CH3 的真实属性，每 30 秒刷新一次。公网页面的 `config.js` 已配置设备鉴权，因此客户打开页面即可看到数据；也可通过 `window.pushBatterySample({timestamp, channels: {CH1, CH2, CH3}, statusText, cycleCount})` 接入其他数据桥接。
+`docs/` 是可直接部署到 GitHub Pages 的静态展示版，采用与 FlowFuse Dashboard 一致的深色仪表盘布局。它不生成模拟电压，会从 OneNET 查询 CH1、CH2、CH3 的真实属性，每 5 秒刷新一次。公网页面的 `config.js` 已配置设备鉴权，因此客户打开页面即可看到数据；也可通过 `window.pushBatterySample({timestamp, channels: {CH1, CH2, CH3}, statusText, cycleCount})` 接入其他数据桥接。
 
 注意：为了让客户无需配置，公网页面会公开读取用的鉴权字符串；如需严格保密，应改用服务端代理并在 OneNET/GitHub 端保存密钥。推送到 `main` 分支后，`.github/workflows/pages.yml` 会自动发布 `docs/`。
 
