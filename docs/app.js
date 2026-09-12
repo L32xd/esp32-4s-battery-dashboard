@@ -247,7 +247,10 @@
     const range = ranges();
     const visible = visibleRecords();
     el.chart.replaceChildren();
-    el.chartEmpty.hidden = records.length > 0;
+    const hasSamples = records.length > 0;
+    el.chartEmpty.hidden = hasSamples;
+    // 显式设置 display，避免部分浏览器/主题样式覆盖 hidden 属性。
+    el.chartEmpty.style.display = hasSamples ? 'none' : 'flex';
 
     for (let i = 0; i < 6; i += 1) {
       const y = plot.top + (plot.bottom - plot.top) * i / 5;
