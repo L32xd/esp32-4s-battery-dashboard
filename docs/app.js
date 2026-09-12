@@ -8,11 +8,12 @@
   const colors = { CH1: '#29b6f6', CH2: '#42d392', CH3: '#ffa726' };
   const channels = ['CH1', 'CH2', 'CH3'];
   const CONFIG_STORAGE_KEY = 'rs485-onenet-config-v1';
+  const publicDataConfig = window.__RS485_CONFIG__ || {};
   const defaultDataConfig = {
     apiBase: 'https://iot-api.heclouds.com',
     productId: '025rYnzKk0',
     deviceName: '4S',
-    authorization: ''
+    authorization: publicDataConfig.authorization || ''
   };
   let dataConfig = loadDataConfig();
 
@@ -66,7 +67,11 @@
   function loadDataConfig() {
     try {
       const saved = JSON.parse(window.localStorage.getItem(CONFIG_STORAGE_KEY) || '{}');
-      return { ...defaultDataConfig, ...saved };
+      return {
+        ...defaultDataConfig,
+        ...saved,
+        ...(publicDataConfig.authorization ? { authorization: publicDataConfig.authorization } : {})
+      };
     } catch (_) {
       return { ...defaultDataConfig };
     }
