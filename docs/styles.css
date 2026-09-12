@@ -74,8 +74,11 @@ h1 { font-size: 21px; }
 .axis { stroke: #6f8da3; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .axis-text { fill: #9fb5c6; font-size: 13px; }
 .axis-title { fill: #cfe2ef; font-size: 14px; }
-.chart-line { fill: none; stroke: var(--cyan); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.chart-point { fill: #07131f; stroke: #61dafb; stroke-width: 2.5; vector-effect: non-scaling-stroke; cursor: crosshair; }
+.chart-line { fill: none; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.chart-line-ch1, .chart-point-ch1 { stroke: var(--cyan); }
+.chart-line-ch2, .chart-point-ch2 { stroke: var(--green); }
+.chart-line-ch3, .chart-point-ch3 { stroke: #ffa726; }
+.chart-point { fill: #07131f; stroke-width: 2.5; vector-effect: non-scaling-stroke; cursor: crosshair; }
 .chart-point:hover, .chart-point.active { fill: #61dafb; stroke: #fff; stroke-width: 3; }
 .crosshair { stroke: var(--cyan-soft); stroke-width: 1; stroke-dasharray: 5 5; opacity: .72; vector-effect: non-scaling-stroke; pointer-events: none; }
 .tooltip { position: absolute; z-index: 5; min-width: 225px; padding: 9px 12px; border: 1px solid #3f7898; border-radius: 8px; background: rgba(7,19,31,.96); color: #f2f8fc; font-size: 14px; line-height: 1.8; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: none; }

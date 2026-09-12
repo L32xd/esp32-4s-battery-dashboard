@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const SAMPLE_MS = 30_000;
+  const SAMPLE_MS = 5_000;
   const MAX_RECORDS = 120;
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const plot = { left: 68, right: 980, top: 18, bottom: 360 };
@@ -31,7 +31,6 @@
     configButton: document.querySelector('#configButton'),
     chart: document.querySelector('#chart'),
     chartWrap: document.querySelector('#chartWrap'),
-    chartEmpty: document.querySelector('#chartEmpty'),
     tooltip: document.querySelector('#tooltip'),
     reset: document.querySelector('#resetZoom'),
     recordsBody: document.querySelector('#recordsBody'),
@@ -47,6 +46,7 @@
   let dragStart = 0;
   let dragEnd = 0;
   let hoverPoint = null;
+  let lastCloudSampleTime = 0;
 
   const beijingDateTime = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', hour12: false,
@@ -124,7 +124,13 @@
       const valid = Object.values(values).filter(item => item.value !== null);
       if (!valid.length) throw new Error('云端暂无 CH1/CH2/CH3 数据');
 
-      const sampleTime = Math.max(...valid.map(item => item.time || 0), Date.now());
+      const cloudTimes = valid.map(item => item.time || 0).filter(time => time > 0);
+      const sampleTime = cloudTimes.length ? Math.max(...cloudTimes) : Date.now();
+      if (sampleTime === lastCloudSampleTime) {
+        setLiveState(`已连接 · ${beijingTime.format(new Date())}`);
+        return;
+      }
+      lastCloudSampleTime = sampleTime;
       const relayOn = boolProperty(properties.ralay_status);
       pushBatterySample({
         timestamp: sampleTime,
@@ -247,11 +253,6 @@
     const range = ranges();
     const visible = visibleRecords();
     el.chart.replaceChildren();
-    const hasSamples = records.length > 0;
-    el.chartEmpty.hidden = hasSamples;
-    // 显式设置 display，避免部分浏览器/主题样式覆盖 hidden 属性。
-    el.chartEmpty.style.display = hasSamples ? 'none' : 'flex';
-
     for (let i = 0; i < 6; i += 1) {
       const y = plot.top + (plot.bottom - plot.top) * i / 5;
       const value = range.max - (range.max - range.min) * i / 5;
@@ -270,11 +271,11 @@
 
     channels.forEach(channel => {
       const points = visible.filter(record => record.values[channel] !== null).map(record => `${scaleX(record.x)},${scaleY(record.values[channel], range)}`).join(' ');
-      el.chart.append(svg('polyline', { points, class: 'chart-line', stroke: colors[channel] }));
+      el.chart.append(svg('polyline', { points, class: `chart-line chart-line-${channel.toLowerCase()}` }));
       visible.forEach((record, index) => {
         const value = record.values[channel];
         if (value === null) return;
-        const circle = svg('circle', { cx: scaleX(record.x), cy: scaleY(value, range), r: 5, fill: colors[channel], class: 'chart-point', 'data-index': index, 'data-channel': channel });
+        const circle = svg('circle', { cx: scaleX(record.x), cy: scaleY(value, range), r: 5, class: `chart-point chart-point-${channel.toLowerCase()}`, 'data-index': index, 'data-channel': channel });
         circle.addEventListener('mouseenter', event => showTooltip(event, record));
         circle.addEventListener('mousemove', event => showTooltip(event, record));
         circle.addEventListener('mouseleave', hideTooltip);
