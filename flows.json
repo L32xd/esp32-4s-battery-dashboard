@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "4S电池 OneNET 可视化",
     "disabled": false,
-    "info": "ESP32 模拟电压经 OneNET 展示",
+    "info": "RS485 盒子 CH1/CH2/CH3 实际电压经 OneNET 展示",
     "env": []
   },
   {
@@ -76,7 +76,7 @@
     "y": 100,
     "wires": [
       [
-        "4a107bbc"
+        "4a107bbd"
       ]
     ]
   },
@@ -84,9 +84,9 @@
     "id": "4a107bbc",
     "type": "function",
     "z": "4a100000",
-    "name": "解析电压与状态",
-    "func": "const body = msg.payload;\nif (msg.statusCode !== 200 || !body || body.code !== 0 || !Array.isArray(body.data)) {\n  const detail = body && (body.msg || body.message) ? (body.msg || body.message) : \"HTTP \" + (msg.statusCode || \"错误\");\n  node.status({fill:\"red\",shape:\"ring\",text:detail});\n  return [null,null,null];\n}\nconst p = Object.fromEntries(body.data.map(item => [item.identifier,item]));\nconst num = value => { const n=Number(value); return Number.isFinite(n) ? n : null; };\nconst bool = value => value === true || value === \"true\" || value === 1 || value === \"1\";\nconst voltage = num(p.Voltage && p.Voltage.value);\nif (voltage === null) {\n  node.status({fill:\"yellow\",shape:\"ring\",text:\"暂无 Voltage\"});\n  return [null,null,null];\n}\nconst sampleTime = num(p.Voltage && p.Voltage.time) || Date.now();\nconst relayOn = bool(p.ralay_status && p.ralay_status.value);\nconst statusText = relayOn ? \"放电（继电器1～3全部吸合）\" : \"充电（继电器1～3全部断开）\";\nconst cycleValue = num(p.cycle_count && p.cycle_count.value) ?? \"--\";\nnode.status({fill:\"green\",shape:\"dot\",text:voltage.toFixed(4)+\" V\"});\nreturn [\n  {payload:voltage,topic:\"组内总电压\",timestamp:sampleTime,statusText,cycleValue},\n  {payload:statusText},\n  {payload:cycleValue}\n];",
-    "outputs": 3,
+    "name": "解析 CH1/CH2/CH3 与状态",
+    "func": "const body = msg.payload;\nif (msg.statusCode !== 200 || !body || body.code !== 0 || !Array.isArray(body.data)) {\n  const detail = body && (body.msg || body.message) ? (body.msg || body.message) : \"HTTP \" + (msg.statusCode || \"错误\");\n  node.status({fill:\"red\",shape:\"ring\",text:detail});\n  return [null,null,null,null,null];\n}\nconst p = Object.fromEntries(body.data.map(item => [item.identifier,item]));\nconst num = value => { const n=Number(value); return Number.isFinite(n) ? n : null; };\nconst bool = value => value === true || value === \"true\" || value === 1 || value === \"1\";\nconst aliases = {\n  CH1: [\"CH1\",\"ch1\",\"CH_1\",\"Voltage_CH1\",\"Voltage1\",\"voltage1\"],\n  CH2: [\"CH2\",\"ch2\",\"CH_2\",\"Voltage_CH2\",\"Voltage2\",\"voltage2\"],\n  CH3: [\"CH3\",\"ch3\",\"CH_3\",\"Voltage_CH3\",\"Voltage3\",\"voltage3\"]\n};\nconst readChannel = names => {\n  for (const name of names) {\n    const item = p[name];\n    const value = num(item && item.value);\n    if (value !== null) return {value,time:num(item.time)};\n  }\n  return {value:null,time:null};\n};\nconst channels = {CH1:readChannel(aliases.CH1), CH2:readChannel(aliases.CH2), CH3:readChannel(aliases.CH3)};\nif (channels.CH1.value === null && p.Voltage) channels.CH1 = {value:num(p.Voltage.value),time:num(p.Voltage.time)};\nconst validValues = Object.values(channels).filter(item => item.value !== null);\nif (!validValues.length) {\n  node.status({fill:\"yellow\",shape:\"ring\",text:\"暂无 CH1/CH2/CH3\"});\n  return [null,null,null,null,null];\n}\nconst sampleTime = Math.max(...validValues.map(item => item.time || 0), Date.now());\nconst relayOn = bool(p.ralay_status && p.ralay_status.value);\nconst statusText = relayOn ? \"放电（继电器1～3全部吸合）\" : \"充电（继电器1～3全部断开）\";\nconst cycleValue = num(p.cycle_count && p.cycle_count.value) ?? \"--\";\nconst common = {channels:Object.fromEntries(Object.entries(channels).map(([key,item]) => [key,item.value])),timestamp:sampleTime,statusText,cycleValue};\nnode.status({fill:\"green\",shape:\"dot\",text:validValues.length+\" 路电压已更新\"});\nconst output = name => channels[name].value === null ? null : {payload:channels[name].value,topic:name,...common};\nreturn [output(\"CH1\"),output(\"CH2\"),output(\"CH3\"),{payload:statusText},{payload:cycleValue}];",
+    "outputs": 5,
     "timeout": 0,
     "noerr": 0,
     "initialize": "",
@@ -97,7 +97,15 @@
     "wires": [
       [
         "4a10b99a",
-        "4a12899b"
+        "4a12899c"
+      ],
+      [
+        "4a10b99b",
+        "4a12899c"
+      ],
+      [
+        "4a10b99c",
+        "4a12899c"
       ],
       [
         "4a10f778"
@@ -108,7 +116,42 @@
     ]
   },
   {
-    "id": "4a109aab",
+    "id": "4a107bbd",
+    "type": "function",
+    "z": "4a100000",
+    "name": "解析 CH1/CH2/CH3 与状态（实际时间）",
+    "func": "const body = msg.payload;\nif (msg.statusCode !== 200 || !body || body.code !== 0 || !Array.isArray(body.data)) {\n  const detail = body && (body.msg || body.message) ? (body.msg || body.message) : \"HTTP \" + (msg.statusCode || \"错误\");\n  node.status({fill:\"red\",shape:\"ring\",text:detail});\n  return [null,null,null,null,null];\n}\nconst p = Object.fromEntries(body.data.map(item => [item.identifier,item]));\nconst num = value => { const n=Number(value); return Number.isFinite(n) ? n : null; };\nconst bool = value => value === true || value === \"true\" || value === 1 || value === \"1\";\nconst aliases = {\n  CH1:[\"CH1\",\"ch1\",\"CH_1\",\"Voltage_CH1\",\"Voltage1\",\"voltage1\"],\n  CH2:[\"CH2\",\"ch2\",\"CH_2\",\"Voltage_CH2\",\"Voltage2\",\"voltage2\"],\n  CH3:[\"CH3\",\"ch3\",\"CH_3\",\"Voltage_CH3\",\"Voltage3\",\"voltage3\"]\n};\nconst readChannel = names => {\n  for (const name of names) {\n    const item = p[name];\n    const value = num(item && item.value);\n    if (value !== null) return {value,time:num(item.time)};\n  }\n  return {value:null,time:null};\n};\nconst channels = {CH1:readChannel(aliases.CH1),CH2:readChannel(aliases.CH2),CH3:readChannel(aliases.CH3)};\nif (channels.CH1.value === null && p.Voltage) channels.CH1 = {value:num(p.Voltage.value),time:num(p.Voltage.time)};\nconst validValues = Object.values(channels).filter(item => item.value !== null);\nif (!validValues.length) {\n  node.status({fill:\"yellow\",shape:\"ring\",text:\"暂无 CH1/CH2/CH3\"});\n  return [null,null,null,null,null];\n}\nconst sampleTime = Math.max(...validValues.map(item => item.time || 0)) || Date.now();\nconst relayOn = bool(p.ralay_status && p.ralay_status.value);\nconst statusText = relayOn ? \"放电（继电器1～3全部吸合）\" : \"充电（继电器1～3全部断开）\";\nconst cycleValue = num(p.cycle_count && p.cycle_count.value) ?? \"--\";\nconst common = {channels:Object.fromEntries(Object.entries(channels).map(([key,item]) => [key,item.value])),timestamp:sampleTime,statusText,cycleValue};\nnode.status({fill:\"green\",shape:\"dot\",text:validValues.length+\" 路电压已更新\"});\nconst output = name => channels[name].value === null ? null : {payload:channels[name].value,topic:name,...common};\nreturn [output(\"CH1\"),output(\"CH2\"),output(\"CH3\"),{payload:statusText},{payload:cycleValue}];",
+    "outputs": 5,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 880,
+    "y": 100,
+    "wires": [
+      [
+        "4a10b99a",
+        "4a12899c"
+      ],
+      [
+        "4a10b99b",
+        "4a12899c"
+      ],
+      [
+        "4a10b99c",
+        "4a12899c"
+      ],
+      [
+        "4a10f778"
+      ],
+      [
+        "4a113556"
+      ]
+    ]
+  },
+ {
+   "id": "4a109aab",
     "type": "comment",
     "z": "4a100000",
     "name": "鉴权信息从 .env 读取，不会发送到浏览器",
@@ -121,7 +164,7 @@
     "id": "4a10b99a",
     "type": "ui-gauge",
     "z": "4a100000",
-    "name": "当前总电压",
+    "name": "当前 CH1 电压",
     "group": "4a122cce",
     "order": 1,
     "value": "payload",
@@ -130,7 +173,7 @@
     "height": 4,
     "gtype": "gauge-half",
     "gstyle": "needle",
-    "title": "组内总电压",
+    "title": "CH1 电压",
     "alwaysShowTitle": true,
     "floatingTitlePosition": "top-left",
     "units": "V",
@@ -139,7 +182,7 @@
     "suffix": "",
     "segments": [
       {
-        "from": "12",
+        "from": "0",
         "color": "#ef5350",
         "text": "低",
         "textType": "label"
@@ -157,7 +200,115 @@
         "textType": "label"
       }
     ],
-    "min": "12",
+    "min": "0",
+    "max": "17",
+    "sizeThickness": 16,
+    "sizeGap": 4,
+    "sizeKeyThickness": 8,
+    "styleRounded": true,
+    "styleGlow": true,
+    "className": "",
+    "x": 1130,
+    "y": 40,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "4a10b99b",
+    "type": "ui-gauge",
+    "z": "4a100000",
+    "name": "当前 CH2 电压",
+    "group": "4a122cce",
+    "order": 2,
+    "value": "payload",
+    "valueType": "msg",
+    "width": 4,
+    "height": 4,
+    "gtype": "gauge-half",
+    "gstyle": "needle",
+    "title": "CH2 电压",
+    "alwaysShowTitle": true,
+    "floatingTitlePosition": "top-left",
+    "units": "V",
+    "icon": "battery_charging_full",
+    "prefix": "",
+    "suffix": "",
+    "segments": [
+      {
+        "from": "0",
+        "color": "#ef5350",
+        "text": "低",
+        "textType": "label"
+      },
+      {
+        "from": "12",
+        "color": "#42a5f5",
+        "text": "正常",
+        "textType": "label"
+      },
+      {
+        "from": "16.6",
+        "color": "#ffa726",
+        "text": "高",
+        "textType": "label"
+      }
+    ],
+    "min": "0",
+    "max": "17",
+    "sizeThickness": 16,
+    "sizeGap": 4,
+    "sizeKeyThickness": 8,
+    "styleRounded": true,
+    "styleGlow": true,
+    "className": "",
+    "x": 1130,
+    "y": 40,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "4a10b99c",
+    "type": "ui-gauge",
+    "z": "4a100000",
+    "name": "当前 CH3 电压",
+    "group": "4a122cce",
+    "order": 3,
+    "value": "payload",
+    "valueType": "msg",
+    "width": 4,
+    "height": 4,
+    "gtype": "gauge-half",
+    "gstyle": "needle",
+    "title": "CH3 电压",
+    "alwaysShowTitle": true,
+    "floatingTitlePosition": "top-left",
+    "units": "V",
+    "icon": "battery_charging_full",
+    "prefix": "",
+    "suffix": "",
+    "segments": [
+      {
+        "from": "0",
+        "color": "#ef5350",
+        "text": "低",
+        "textType": "label"
+      },
+      {
+        "from": "12",
+        "color": "#42a5f5",
+        "text": "正常",
+        "textType": "label"
+      },
+      {
+        "from": "16.6",
+        "color": "#ffa726",
+        "text": "高",
+        "textType": "label"
+      }
+    ],
+    "min": "0",
     "max": "17",
     "sizeThickness": 16,
     "sizeGap": 4,
@@ -175,7 +326,7 @@
     "id": "4a10d889",
     "type": "ui-template",
     "z": "4a100000",
-    "group": "4a124bbd",
+    "group": "",
     "page": "",
     "ui": "",
     "name": "可缩放电压曲线",
@@ -196,11 +347,59 @@
     ]
   },
   {
-    "id": "4a10f778",
+    "id": "4a10d88a",
+    "type": "ui-template",
+    "z": "4a100000",
+    "group": "",
+    "page": "",
+    "ui": "",
+    "name": "CH1 CH2 CH3 可缩放曲线",
+    "order": 1,
+    "width": 12,
+    "height": 7,
+    "head": "",
+    "format": "<template>\n<div class=\"rs485-zoom-chart\">\n  <div class=\"rs485-chart-head\">\n    <div>\n      <div class=\"rs485-chart-title\">CH1 / CH2 / CH3 电压记录（每30秒）</div>\n      <div class=\"rs485-chart-hint\">三路真实数据 · 滚轮缩放 · 双击复位</div>\n    </div>\n    <v-btn size=\"small\" variant=\"tonal\" color=\"primary\" @click=\"resetZoom\">复位</v-btn>\n  </div>\n  <div class=\"rs485-legend\"><span v-for=\"item in series\" :key=\"item.key\"><i :style=\"{background:item.color}\"></i>{{item.name}}</span></div>\n  <div ref=\"plot\" class=\"rs485-plot\" @wheel.prevent.stop=\"onWheel\" @dblclick=\"resetZoom\">\n    <svg viewBox=\"0 0 1000 410\" preserveAspectRatio=\"none\" aria-label=\"三路电压曲线\">\n      <g v-for=\"tick in yTicks\" :key=\"'y'+tick.value\"><line x1=\"68\" x2=\"980\" :y1=\"tick.y\" :y2=\"tick.y\" class=\"rs485-grid\"/><text x=\"58\" :y=\"tick.y+5\" text-anchor=\"end\" class=\"rs485-axis-text\">{{tick.value.toFixed(2)}}</text></g>\n      <g v-for=\"tick in xTicks\" :key=\"'x'+tick.value\"><line :x1=\"tick.x\" :x2=\"tick.x\" y1=\"18\" y2=\"360\" class=\"rs485-grid rs485-grid-x\"/><text :x=\"tick.x\" y=\"390\" text-anchor=\"middle\" class=\"rs485-axis-text\">{{formatTime(tick.value)}}</text></g>\n      <line x1=\"68\" x2=\"980\" y1=\"360\" y2=\"360\" class=\"rs485-axis\"/><line x1=\"68\" x2=\"68\" y1=\"18\" y2=\"360\" class=\"rs485-axis\"/>\n      <text x=\"18\" y=\"190\" text-anchor=\"middle\" class=\"rs485-axis-title\" transform=\"rotate(-90 18 190)\">电压 (V)</text>\n      <polyline v-for=\"item in series\" :key=\"item.key\" v-if=\"item.points.length>1\" :points=\"line(item.points)\" :stroke=\"item.color\" class=\"rs485-line\"/>\n      <circle v-for=\"point in plottedPoints\" :key=\"point.key\" :cx=\"scaleX(point.x)\" :cy=\"scaleY(point.value)\" r=\"5\" :fill=\"point.color\" class=\"rs485-point\" @mouseenter=\"showTooltip($event,point)\" @mousemove=\"showTooltip($event,point)\" @mouseleave=\"hoverPoint=null\"/>\n    </svg>\n    <div v-if=\"hoverPoint\" class=\"rs485-tooltip\" :style=\"{left:tooltipX+'px',top:tooltipY+'px'}\">\n      <div><span>采样时间</span>{{formatFullTime(hoverPoint.x)}}</div>\n      <div v-for=\"item in series\" :key=\"item.key\"><span>{{item.name}}</span>{{formatValue(hoverPoint.values[item.key])}}</div>\n    </div>\n    <div v-if=\"!points.length\" class=\"rs485-empty\">等待第一条真实采样数据...</div>\n  </div>\n</div>\n</template>\n<script>\nexport default {\n  data(){return {points:[],viewStart:0,viewEnd:0,zoomed:false,hoverPoint:null,tooltipX:0,tooltipY:0}},\n  watch:{msg:{deep:true,immediate:true,handler(value){\n    if(!value||!Array.isArray(value.payload)) return\n    this.points=value.payload.map(point=>({x:Number(point.x),values:{CH1:Number(point.values&&point.values.CH1),CH2:Number(point.values&&point.values.CH2),CH3:Number(point.values&&point.values.CH3)}})).filter(point=>Number.isFinite(point.x)&&Object.values(point.values).some(Number.isFinite)).sort((a,b)=>a.x-b.x)\n    if(!this.zoomed||!this.viewStart||!this.viewEnd) this.resetZoom()\n  }}},\n  computed:{\n    dataStart(){return this.points.length?this.points[0].x:Date.now()-30000},\n    dataEnd(){return this.points.length?this.points[this.points.length-1].x:Date.now()},\n    visible(){return this.points.filter(point=>point.x>=this.viewStart&&point.x<=this.viewEnd)},\n    series(){return [{key:'CH1',name:'CH1',color:'#29b6f6'},{key:'CH2',name:'CH2',color:'#42d392'},{key:'CH3',name:'CH3',color:'#ffa726'}].map(item=>({...item,points:this.visible.filter(point=>Number.isFinite(point.values[item.key])).map(point=>({x:point.x,value:point.values[item.key]}))}))},\n    plottedPoints(){return this.series.flatMap(item=>item.points.map(point=>({...point,values:this.points.find(sample=>sample.x===point.x)?.values||{},color:item.color,key:item.key+'-'+point.x})))},\n    yRange(){const values=this.series.flatMap(item=>item.points.map(point=>point.value));if(!values.length)return {min:12,max:17};const min=Math.min(...values),max=Math.max(...values),pad=Math.max((max-min)*.18,.05);return {min:min-pad,max:max+pad}},\n    yTicks(){return Array.from({length:6},(_,i)=>{const value=this.yRange.max-(this.yRange.max-this.yRange.min)*i/5;return {value,y:18+342*i/5}})},\n    xTicks(){const start=this.viewStart||this.dataStart,end=this.viewEnd||this.dataEnd;return Array.from({length:6},(_,i)=>({value:start+(end-start)*i/5,x:68+912*i/5}))}\n  },\n  methods:{\n    resetZoom(){this.viewStart=this.dataStart;this.viewEnd=Math.max(this.dataEnd,this.dataStart+30000);this.zoomed=false;this.hoverPoint=null},\n    line(points){return points.map(point=>this.scaleX(point.x)+','+this.scaleY(point.value)).join(' ')},\n    scaleX(value){return 68+(value-this.viewStart)/Math.max(this.viewEnd-this.viewStart,1)*912},\n    scaleY(value){return 18+(this.yRange.max-value)/Math.max(this.yRange.max-this.yRange.min,.001)*342},\n    formatTime(value){return new Date(value).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Asia/Shanghai'})},\n    formatFullTime(value){return new Date(value).toLocaleString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'})},\n    formatValue(value){return Number.isFinite(value)?value.toFixed(4)+' V':'--'},\n    showTooltip(event,point){const rect=this.$refs.plot.getBoundingClientRect();this.hoverPoint=point;this.tooltipX=Math.max(8,Math.min(rect.width-235,event.clientX-rect.left+14));this.tooltipY=Math.max(8,Math.min(rect.height-110,event.clientY-rect.top-90))},\n    onWheel(event){if(this.points.length<2)return;const span=Math.max(this.viewEnd-this.viewStart,30000),full=Math.max(this.dataEnd-this.dataStart,30000),factor=event.deltaY<0?.75:1.333333,newSpan=Math.max(30000,Math.min(full,span*factor)),ratio=Math.max(0,Math.min(1,(event.offsetX/this.$refs.plot.clientWidth))),anchor=this.viewStart+span*ratio;this.viewStart=Math.max(this.dataStart,anchor-newSpan*ratio);this.viewEnd=Math.min(this.dataEnd,anchor+newSpan*(1-ratio));if(this.viewEnd-this.viewStart<newSpan)this.viewStart=Math.max(this.dataStart,this.viewEnd-newSpan);this.zoomed=true}\n  }\n}\n</script>\n<style>\n.rs485-zoom-chart{height:100%;display:flex;flex-direction:column;padding:4px 8px 8px;color:#dceeff}.rs485-chart-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 4px}.rs485-chart-title{font-size:18px;font-weight:600}.rs485-chart-hint{margin-top:2px;font-size:12px;color:#8fa9bd}.rs485-legend{display:flex;gap:18px;padding:0 4px 6px;font-size:12px;color:#afc6d7}.rs485-legend i{display:inline-block;width:10px;height:10px;margin-right:5px;border-radius:50%}.rs485-plot{position:relative;flex:1;min-height:310px;overflow:hidden;touch-action:none;cursor:crosshair;user-select:none}.rs485-plot svg{display:block;width:100%;height:100%}.rs485-grid{stroke:#294158;stroke-width:1;vector-effect:non-scaling-stroke}.rs485-grid-x{stroke-dasharray:4 5;opacity:.65}.rs485-axis{stroke:#6f8da3;stroke-width:1.2;vector-effect:non-scaling-stroke}.rs485-axis-text{fill:#9fb5c6;font-size:13px;font-family:'Microsoft YaHei',sans-serif}.rs485-axis-title{fill:#cfe2ef;font-size:14px;font-family:'Microsoft YaHei',sans-serif}.rs485-line{fill:none;stroke-width:3;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}.rs485-point{stroke:#07131f;stroke-width:2;vector-effect:non-scaling-stroke;cursor:crosshair}.rs485-point:hover{stroke:#fff;stroke-width:3}.rs485-tooltip{position:absolute;z-index:5;min-width:220px;padding:9px 12px;border:1px solid #3f7898;border-radius:8px;background:rgba(7,19,31,.94);color:#f2f8fc;font-size:14px;line-height:1.8;box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none}.rs485-tooltip span{display:inline-block;width:64px;color:#8fdcff;font-weight:600}.rs485-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8fa9bd}\n</style>",
+    "storeOutMessages": true,
+    "passthru": false,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 1140,
+    "y": 80,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "4a10d88b",
+    "type": "ui-template",
+    "z": "4a100000",
+    "group": "4a124bbd",
+    "page": "",
+    "ui": "",
+    "name": "CH1 CH2 CH3 曲线（稳定版）",
+    "order": 1,
+    "width": 12,
+    "height": 7,
+    "head": "",
+    "format": "<template>\n<div class=\"rs485-zoom-chart\">\n  <div class=\"rs485-chart-head\"><div><div class=\"rs485-chart-title\">CH1 / CH2 / CH3 电压记录（每30秒）</div><div class=\"rs485-chart-hint\">三路真实数据 · 滚轮缩放 · 双击复位</div></div><v-btn size=\"small\" variant=\"tonal\" color=\"primary\" @click=\"resetZoom\">复位</v-btn></div>\n  <div class=\"rs485-legend\"><span v-for=\"item in series\" :key=\"item.key\"><i :style=\"{background:item.color}\"></i>{{item.name}}</span></div>\n  <div ref=\"plot\" class=\"rs485-plot\" @wheel.prevent.stop=\"onWheel\" @dblclick=\"resetZoom\">\n    <svg viewBox=\"0 0 1000 410\" preserveAspectRatio=\"none\" aria-label=\"三路电压曲线\">\n      <g v-for=\"tick in yTicks\" :key=\"'y'+tick.value\"><line x1=\"68\" x2=\"980\" :y1=\"tick.y\" :y2=\"tick.y\" class=\"rs485-grid\"/><text x=\"58\" :y=\"tick.y+5\" text-anchor=\"end\" class=\"rs485-axis-text\">{{tick.value.toFixed(2)}}</text></g>\n      <g v-for=\"tick in xTicks\" :key=\"'x'+tick.value\"><line :x1=\"tick.x\" :x2=\"tick.x\" y1=\"18\" y2=\"360\" class=\"rs485-grid rs485-grid-x\"/><text :x=\"tick.x\" y=\"390\" text-anchor=\"middle\" class=\"rs485-axis-text\">{{formatTime(tick.value)}}</text></g>\n      <line x1=\"68\" x2=\"980\" y1=\"360\" y2=\"360\" class=\"rs485-axis\"/><line x1=\"68\" x2=\"68\" y1=\"18\" y2=\"360\" class=\"rs485-axis\"/><text x=\"18\" y=\"190\" text-anchor=\"middle\" class=\"rs485-axis-title\" transform=\"rotate(-90 18 190)\">电压 (V)</text>\n      <polyline v-for=\"item in series\" :key=\"item.key\" :points=\"line(item.points)\" :stroke=\"item.color\" class=\"rs485-line\"/>\n      <circle v-for=\"point in plottedPoints\" :key=\"point.key\" :cx=\"scaleX(point.x)\" :cy=\"scaleY(point.value)\" r=\"5\" :fill=\"point.color\" class=\"rs485-point\" @mouseenter=\"showTooltip($event,point)\" @mousemove=\"showTooltip($event,point)\" @mouseleave=\"hoverPoint=null\"/>\n    </svg>\n    <div v-if=\"hoverPoint\" class=\"rs485-tooltip\" :style=\"{left:tooltipX+'px',top:tooltipY+'px'}\"><div><span>采样时间</span>{{formatFullTime(hoverPoint.x)}}</div><div v-for=\"item in series\" :key=\"item.key\"><span>{{item.name}}</span>{{formatValue(hoverPoint.values[item.key])}}</div></div>\n    <div v-if=\"!points.length\" class=\"rs485-empty\">等待第一条真实采样数据...</div>\n  </div>\n</div>\n</template>\n<script>\nexport default {\n  data(){return {points:[],viewStart:0,viewEnd:0,zoomed:false,hoverPoint:null,tooltipX:0,tooltipY:0}},\n  watch:{msg:{deep:true,immediate:true,handler(value){if(!value||!Array.isArray(value.payload))return;this.points=value.payload.map(point=>({x:Number(point.x),values:{CH1:Number(point.values&&point.values.CH1),CH2:Number(point.values&&point.values.CH2),CH3:Number(point.values&&point.values.CH3)}})).filter(point=>Number.isFinite(point.x)&&Object.values(point.values).some(Number.isFinite)).sort((a,b)=>a.x-b.x);if(!this.zoomed||!this.viewStart||!this.viewEnd)this.resetZoom()}}},\n  computed:{\n    dataStart(){return this.points.length?this.points[0].x:Date.now()-30000},dataEnd(){return this.points.length?this.points[this.points.length-1].x:Date.now()},\n    visible(){const result=this.points.filter(point=>point.x>=this.viewStart&&point.x<=this.viewEnd);return result.length?result:this.points.slice(-1)},\n    series(){return [{key:'CH1',name:'CH1',color:'#29b6f6'},{key:'CH2',name:'CH2',color:'#42d392'},{key:'CH3',name:'CH3',color:'#ffa726'}].map(item=>({...item,points:this.visible.filter(point=>Number.isFinite(point.values[item.key])).map(point=>({x:point.x,value:point.values[item.key]}))}))},\n    plottedPoints(){return this.series.flatMap(item=>item.points.map(point=>({...point,values:this.points.find(sample=>sample.x===point.x)?.values||{},color:item.color,key:item.key+'-'+point.x})))},\n    yRange(){const values=this.series.flatMap(item=>item.points.map(point=>point.value));if(!values.length)return {min:0,max:17};const min=Math.min(...values),max=Math.max(...values),pad=Math.max((max-min)*.18,.05);return {min:min-pad,max:max+pad}},\n    yTicks(){return Array.from({length:6},(_,i)=>{const value=this.yRange.max-(this.yRange.max-this.yRange.min)*i/5;return {value,y:18+342*i/5}})},\n    xTicks(){const start=this.viewStart||this.dataStart,end=this.viewEnd||this.dataEnd;return Array.from({length:6},(_,i)=>({value:start+(end-start)*i/5,x:68+912*i/5}))}\n  },\n  methods:{\n    resetZoom(){this.viewStart=this.dataStart;this.viewEnd=Math.max(this.dataEnd,this.dataStart+30000);this.zoomed=false;this.hoverPoint=null},\n    line(points){return points.map(point=>this.scaleX(point.x)+','+this.scaleY(point.value)).join(' ')},\n    scaleX(value){return 68+(value-this.viewStart)/Math.max(this.viewEnd-this.viewStart,1)*912},scaleY(value){return 18+(this.yRange.max-value)/Math.max(this.yRange.max-this.yRange.min,.001)*342},\n    formatTime(value){return new Date(value).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Asia/Shanghai'})},formatFullTime(value){return new Date(value).toLocaleString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'})},formatValue(value){return Number.isFinite(value)?value.toFixed(4)+' V':'--'},\n    showTooltip(event,point){const rect=this.$refs.plot.getBoundingClientRect();this.hoverPoint=point;this.tooltipX=Math.max(8,Math.min(rect.width-235,event.clientX-rect.left+14));this.tooltipY=Math.max(8,Math.min(rect.height-110,event.clientY-rect.top-90))},\n    onWheel(event){if(this.points.length<2)return;const span=Math.max(this.viewEnd-this.viewStart,30000),full=Math.max(this.dataEnd-this.dataStart,30000),factor=event.deltaY<0?.75:1.333333,newSpan=Math.max(30000,Math.min(full,span*factor)),ratio=Math.max(0,Math.min(1,(event.offsetX/this.$refs.plot.clientWidth))),anchor=this.viewStart+span*ratio;this.viewStart=Math.max(this.dataStart,anchor-newSpan*ratio);this.viewEnd=Math.min(this.dataEnd,anchor+newSpan*(1-ratio));if(this.viewEnd-this.viewStart<newSpan)this.viewStart=Math.max(this.dataStart,this.viewEnd-newSpan);this.zoomed=true}\n  }\n}\n</script>\n<style>\n.rs485-zoom-chart{height:100%;display:flex;flex-direction:column;padding:4px 8px 8px;color:#dceeff}.rs485-chart-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 4px}.rs485-chart-title{font-size:18px;font-weight:600}.rs485-chart-hint{margin-top:2px;font-size:12px;color:#8fa9bd}.rs485-legend{display:flex;gap:18px;padding:0 4px 6px;font-size:12px;color:#afc6d7}.rs485-legend i{display:inline-block;width:10px;height:10px;margin-right:5px;border-radius:50%}.rs485-plot{position:relative;flex:1;min-height:310px;overflow:hidden;touch-action:none;cursor:crosshair;user-select:none}.rs485-plot svg{display:block;width:100%;height:100%}.rs485-grid{stroke:#294158;stroke-width:1;vector-effect:non-scaling-stroke}.rs485-grid-x{stroke-dasharray:4 5;opacity:.65}.rs485-axis{stroke:#6f8da3;stroke-width:1.2;vector-effect:non-scaling-stroke}.rs485-axis-text{fill:#9fb5c6;font-size:13px;font-family:'Microsoft YaHei',sans-serif}.rs485-axis-title{fill:#cfe2ef;font-size:14px;font-family:'Microsoft YaHei',sans-serif}.rs485-line{fill:none;stroke-width:3;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}.rs485-point{stroke:#07131f;stroke-width:2;vector-effect:non-scaling-stroke;cursor:crosshair}.rs485-point:hover{stroke:#fff;stroke-width:3}.rs485-tooltip{position:absolute;z-index:5;min-width:220px;padding:9px 12px;border:1px solid #3f7898;border-radius:8px;background:rgba(7,19,31,.94);color:#f2f8fc;font-size:14px;line-height:1.8;box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none}.rs485-tooltip span{display:inline-block;width:64px;color:#8fdcff;font-weight:600}.rs485-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8fa9bd}\n</style>",
+    "storeOutMessages": true,
+    "passthru": false,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 1140,
+    "y": 80,
+    "wires": [
+      []
+    ]
+  },
+ {
+   "id": "4a10f778",
     "type": "ui-text",
     "z": "4a100000",
     "group": "4a122cce",
-    "order": 3,
+    "order": 5,
     "width": 4,
     "height": 2,
     "name": "当前状态",
@@ -224,7 +423,7 @@
     "type": "ui-text",
     "z": "4a100000",
     "group": "4a122cce",
-    "order": 2,
+    "order": 4,
     "width": 8,
     "height": 2,
     "name": "北京时间",
@@ -248,7 +447,7 @@
     "type": "ui-text",
     "z": "4a100000",
     "group": "4a122cce",
-    "order": 4,
+    "order": 6,
     "width": 4,
     "height": 2,
     "name": "循环次数",
@@ -345,7 +544,7 @@
   {
     "id": "4a122cce",
     "type": "ui-group",
-    "name": "实时概览",
+    "name": "RS485 三路电压",
     "page": "4a120ddf",
     "width": 12,
     "height": 1,
@@ -359,7 +558,7 @@
   {
     "id": "4a124bbd",
     "type": "ui-group",
-    "name": "电压曲线",
+    "name": "CH1/CH2/CH3 电压曲线",
     "page": "4a120ddf",
     "width": 12,
     "height": 1,
@@ -394,7 +593,30 @@
     ]
   },
   {
-    "id": "4a12a001",
+    "id": "4a12899c",
+    "type": "function",
+    "z": "4a100000",
+    "name": "保存 CH1 CH2 CH3 曲线与表格记录",
+    "func": "const timestamp = Number(msg.timestamp) || Date.now();\nconst toNumber = value => {\n  if (value === null || value === undefined || value === \"\") return null;\n  const n = Number(value);\n  return Number.isFinite(n) ? n : null;\n};\nconst source = msg.channels || {};\nconst values = {\n  CH1: toNumber(source.CH1),\n  CH2: toNumber(source.CH2),\n  CH3: toNumber(source.CH3)\n};\nif (values[msg.topic] === null) values[msg.topic] = toNumber(msg.payload);\nif (!Object.values(values).some(value => value !== null)) return [null,null];\n\nlet points = context.get(\"points\") || [];\nconst duplicate = points.length && points[points.length - 1].x === timestamp;\nconst point = {x:timestamp, values};\nif (duplicate) points[points.length - 1] = point;\nelse points.push(point);\nif (points.length > 120) points = points.slice(-120);\ncontext.set(\"points\", points);\n\nlet records = context.get(\"records\") || [];\nconst display = value => value === null ? \"--\" : value.toFixed(4);\nconst record = {\n  \"采样时间\": new Date(timestamp).toLocaleString(\"zh-CN\", {hour12:false,timeZone:\"Asia/Shanghai\"}),\n  \"CH1(V)\": display(values.CH1),\n  \"CH2(V)\": display(values.CH2),\n  \"CH3(V)\": display(values.CH3),\n  \"当前状态\": msg.statusText || \"--\",\n  \"循环次数\": msg.cycleValue ?? \"--\"\n};\nif (duplicate && records.length) records[0] = record;\nelse records.unshift(record);\nif (records.length > 120) records = records.slice(0, 120);\ncontext.set(\"records\", records);\n\nreturn [\n  {payload:points},\n  {payload:records}\n];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1120,
+    "y": 80,
+    "wires": [
+      [
+        "4a10d88b"
+      ],
+      [
+        "4a12b003"
+      ]
+    ]
+  },
+ {
+   "id": "4a12a001",
     "type": "inject",
     "z": "4a100000",
     "name": "每秒刷新北京时间",
@@ -494,7 +716,7 @@
     "z": "4a100000",
     "group": "4a12b002",
     "name": "RS485数据记录表",
-    "label": "最近120条采样记录（每30秒）",
+    "label": "最近120条 CH1/CH2/CH3 采样记录（每30秒）",
     "order": 1,
     "width": 12,
     "height": 10,

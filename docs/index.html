@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0d2235">
-  <title>4S 电池实时监控</title>
+  <title>RS485 CH1/CH2/CH3 实时监控</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="topbar">
     <button id="menuButton" class="icon-button" aria-label="打开导航" aria-expanded="true">☰</button>
     <strong id="pageTitle">实时监控</strong>
-    <span class="demo-badge">模拟数据</span>
+    <span class="live-badge">等待实时数据</span>
   </header>
 
   <div class="layout">
@@ -23,65 +23,30 @@
     <main class="main">
       <section id="monitorPage" class="page active">
         <article class="card overview-card">
-          <h1>实时概览</h1>
-          <div class="overview-grid">
-            <div class="gauge-wrap">
-              <div class="label">组内总电压</div>
-              <svg class="gauge" viewBox="0 0 300 175" aria-label="组内总电压仪表盘">
-                <path class="gauge-track" d="M35 145 A115 115 0 0 1 265 145"/>
-                <path id="gaugeValue" class="gauge-value" d="M35 145 A115 115 0 0 1 265 145"/>
-                <text x="35" y="164" class="gauge-limit">12</text>
-                <text x="250" y="164" class="gauge-limit">17</text>
-                <text id="voltageValue" x="150" y="121" class="gauge-number">--</text>
-                <text x="150" y="145" class="gauge-unit">V</text>
-              </svg>
-            </div>
-            <div class="metric time-metric">
-              <span>北京时间</span>
-              <strong id="beijingTime">--</strong>
-            </div>
-            <div class="metric status-metric">
-              <span>当前状态</span>
-              <strong id="statusText">--</strong>
-            </div>
-            <div class="metric cycle-metric">
-              <span>循环次数</span>
-              <strong id="cycleCount">0</strong>
-            </div>
+          <div class="section-head"><div><h1>RS485 三路电压</h1><p>数据源：DAM5x03D · CH1 / CH2 / CH3</p></div><span id="dataState" class="data-state">等待采样</span></div>
+          <div class="channel-grid">
+            <div class="channel-card"><div class="channel-name">CH1</div><svg class="gauge" viewBox="0 0 300 175" aria-label="CH1电压仪表盘"><path class="gauge-track" d="M35 145 A115 115 0 0 1 265 145"/><path id="CH1Gauge" class="gauge-value ch1" d="M35 145 A115 115 0 0 1 265 145"/><text x="35" y="164" class="gauge-limit">0</text><text x="250" y="164" class="gauge-limit">17</text><text id="CH1Value" x="150" y="121" class="gauge-number">--</text><text x="150" y="145" class="gauge-unit">V</text></svg></div>
+            <div class="channel-card"><div class="channel-name">CH2</div><svg class="gauge" viewBox="0 0 300 175" aria-label="CH2电压仪表盘"><path class="gauge-track" d="M35 145 A115 115 0 0 1 265 145"/><path id="CH2Gauge" class="gauge-value ch2" d="M35 145 A115 115 0 0 1 265 145"/><text x="35" y="164" class="gauge-limit">0</text><text x="250" y="164" class="gauge-limit">17</text><text id="CH2Value" x="150" y="121" class="gauge-number">--</text><text x="150" y="145" class="gauge-unit">V</text></svg></div>
+            <div class="channel-card"><div class="channel-name">CH3</div><svg class="gauge" viewBox="0 0 300 175" aria-label="CH3电压仪表盘"><path class="gauge-track" d="M35 145 A115 115 0 0 1 265 145"/><path id="CH3Gauge" class="gauge-value ch3" d="M35 145 A115 115 0 0 1 265 145"/><text x="35" y="164" class="gauge-limit">0</text><text x="250" y="164" class="gauge-limit">17</text><text id="CH3Value" x="150" y="121" class="gauge-number">--</text><text x="150" y="145" class="gauge-unit">V</text></svg></div>
+          </div>
+          <div class="summary-grid">
+            <div class="metric time-metric"><span>北京时间</span><strong id="beijingTime">--</strong></div>
+            <div class="metric status-metric"><span>当前状态</span><strong id="statusText">--</strong></div>
+            <div class="metric cycle-metric"><span>循环次数</span><strong id="cycleCount">--</strong></div>
           </div>
         </article>
 
         <article class="card chart-card">
-          <div class="chart-head">
-            <div>
-              <h1>电压曲线</h1>
-              <h2>电压记录（每30秒）</h2>
-              <p>将鼠标移到采样点查看横纵坐标 · 曲线区域内滚轮缩放 · 按住鼠标拖动 · 双击复位</p>
-            </div>
-            <button id="resetZoom" class="action-button">复位</button>
-          </div>
-          <div id="chartWrap" class="chart-wrap">
-            <svg id="chart" viewBox="0 0 1000 410" preserveAspectRatio="none" aria-label="可缩放电压曲线"></svg>
-            <div id="tooltip" class="tooltip" hidden></div>
-          </div>
+          <div class="chart-head"><div><h1>三路电压曲线</h1><p>CH1 / CH2 / CH3 · 将鼠标移到采样点查看三路数值 · 滚轮缩放 · 双击复位</p></div><button id="resetZoom" class="action-button">复位</button></div>
+          <div class="chart-legend"><span><i class="legend-ch1"></i>CH1</span><span><i class="legend-ch2"></i>CH2</span><span><i class="legend-ch3"></i>CH3</span></div>
+          <div id="chartWrap" class="chart-wrap"><svg id="chart" viewBox="0 0 1000 410" preserveAspectRatio="none" aria-label="CH1、CH2、CH3可缩放电压曲线"></svg><div id="tooltip" class="tooltip" hidden></div><div id="chartEmpty" class="chart-empty">等待第一条真实采样数据...</div></div>
         </article>
       </section>
 
       <section id="recordsPage" class="page">
         <article class="card records-card">
-          <div class="records-head">
-            <div>
-              <h1>RS485采样数据</h1>
-              <p>最近120条采样记录（每30秒）</p>
-            </div>
-            <input id="searchInput" type="search" placeholder="搜索记录" aria-label="搜索记录">
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>采样时间</th><th>总电压(V)</th><th>当前状态</th><th>循环次数</th></tr></thead>
-              <tbody id="recordsBody"></tbody>
-            </table>
-          </div>
+          <div class="records-head"><div><h1>RS485采样数据</h1><p>最近120条 CH1 / CH2 / CH3 真实采样记录</p></div><input id="searchInput" type="search" placeholder="搜索记录" aria-label="搜索记录"></div>
+          <div class="table-wrap"><table><thead><tr><th>采样时间</th><th>CH1(V)</th><th>CH2(V)</th><th>CH3(V)</th><th>当前状态</th><th>循环次数</th></tr></thead><tbody id="recordsBody"></tbody></table></div>
         </article>
       </section>
     </main>

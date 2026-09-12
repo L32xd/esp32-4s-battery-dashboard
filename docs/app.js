@@ -2,12 +2,11 @@
   'use strict';
 
   const SAMPLE_MS = 30_000;
-  const CHARGE_MS = 4 * 60 * 60 * 1000;
-  const DISCHARGE_MS = 60 * 60 * 1000;
-  const CYCLE_MS = CHARGE_MS + DISCHARGE_MS;
   const MAX_RECORDS = 120;
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const plot = { left: 68, right: 980, top: 18, bottom: 360 };
+  const colors = { CH1: '#29b6f6', CH2: '#42d392', CH3: '#ffa726' };
+  const channels = ['CH1', 'CH2', 'CH3'];
 
   const el = {
     menu: document.querySelector('#menuButton'),
@@ -15,21 +14,18 @@
     title: document.querySelector('#pageTitle'),
     monitor: document.querySelector('#monitorPage'),
     records: document.querySelector('#recordsPage'),
-    voltage: document.querySelector('#voltageValue'),
-    gauge: document.querySelector('#gaugeValue'),
     time: document.querySelector('#beijingTime'),
     status: document.querySelector('#statusText'),
     cycles: document.querySelector('#cycleCount'),
+    dataState: document.querySelector('#dataState'),
     chart: document.querySelector('#chart'),
     chartWrap: document.querySelector('#chartWrap'),
+    chartEmpty: document.querySelector('#chartEmpty'),
     tooltip: document.querySelector('#tooltip'),
     reset: document.querySelector('#resetZoom'),
     recordsBody: document.querySelector('#recordsBody'),
     search: document.querySelector('#searchInput')
   };
-
-  const initialCycleStart = Number(localStorage.getItem('batteryDemoCycleStart')) || Date.now() - 90 * 60 * 1000;
-  localStorage.setItem('batteryDemoCycleStart', String(initialCycleStart));
 
   let records = [];
   let viewStart = 0;
@@ -39,7 +35,7 @@
   let dragX = 0;
   let dragStart = 0;
   let dragEnd = 0;
-  let lastHoverIndex = -1;
+  let hoverPoint = null;
 
   const beijingDateTime = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', hour12: false,
@@ -51,62 +47,68 @@
     hour: '2-digit', minute: '2-digit', second: '2-digit'
   });
 
-  function phaseAt(timestamp) {
-    const elapsed = Math.max(0, timestamp - initialCycleStart);
-    const cycleCount = Math.floor(elapsed / CYCLE_MS);
-    const within = elapsed % CYCLE_MS;
-    const charging = within < CHARGE_MS;
-    const progress = charging ? within / CHARGE_MS : (within - CHARGE_MS) / DISCHARGE_MS;
-    return { charging, progress, cycleCount };
+  function numberOrNull(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
   }
 
-  function simulatedVoltage(timestamp) {
-    const phase = phaseAt(timestamp);
-    const base = phase.charging
-      ? 13.2 + 3.6 * phase.progress
-      : 16.8 - 4.8 * phase.progress;
-    const ripple = Math.sin(timestamp / 47_000) * 0.018 + Math.sin(timestamp / 19_000) * 0.009;
-    return Math.max(12, Math.min(16.8, base + ripple));
-  }
-
-  function makeRecord(timestamp) {
-    const phase = phaseAt(timestamp);
+  function normalizeSample(sample) {
+    if (!sample || typeof sample !== 'object') return null;
+    const source = sample.channels && typeof sample.channels === 'object' ? sample.channels : sample;
+    const values = Object.fromEntries(channels.map(channel => [channel, numberOrNull(source[channel])]));
+    if (!channels.some(channel => values[channel] !== null)) return null;
+    const timestamp = numberOrNull(sample.timestamp || sample.time) || Date.now();
     return {
       x: timestamp,
-      y: Number(simulatedVoltage(timestamp).toFixed(4)),
-      status: phase.charging ? '充电（继电器1～3全部断开）' : '放电（继电器1～3全部吸合）',
-      cycleCount: phase.cycleCount
+      values,
+      status: sample.statusText || sample.status || '--',
+      cycleCount: sample.cycleValue ?? sample.cycleCount ?? '--'
     };
   }
 
-  function seedRecords() {
-    const end = Math.floor(Date.now() / SAMPLE_MS) * SAMPLE_MS;
-    for (let i = 19; i >= 0; i -= 1) records.push(makeRecord(end - i * SAMPLE_MS));
-    resetZoom();
-    updateDashboard(records[records.length - 1]);
+  function pushBatterySample(sample) {
+    const record = normalizeSample(sample);
+    if (!record) return false;
+    const duplicate = records.length && records[records.length - 1].x === record.x;
+    if (duplicate) records[records.length - 1] = record;
+    else records.push(record);
+    if (records.length > MAX_RECORDS) records = records.slice(-MAX_RECORDS);
+    if (!zoomed) resetZoom();
+    updateDashboard(record);
     renderTable();
+    return true;
   }
+
+  // Node-RED 或其他数据桥接可以调用 window.pushBatterySample(sample) 注入真实数据。
+  window.pushBatterySample = pushBatterySample;
 
   function updateClock() {
     el.time.textContent = beijingDateTime.format(new Date());
   }
 
   function updateDashboard(record) {
-    el.voltage.textContent = record.y.toFixed(4);
+    if (!record) {
+      channels.forEach(channel => updateGauge(channel, null));
+      el.status.textContent = '--';
+      el.cycles.textContent = '--';
+      el.dataState.textContent = '等待采样';
+      renderChart();
+      return;
+    }
+    channels.forEach(channel => updateGauge(channel, record.values[channel]));
     el.status.textContent = record.status;
     el.cycles.textContent = record.cycleCount;
-    const ratio = Math.max(0, Math.min(1, (record.y - 12) / 5));
-    el.gauge.style.strokeDashoffset = String(361.28 * (1 - ratio));
+    el.dataState.textContent = `已接收 · ${beijingDateTime.format(new Date(record.x))}`;
     renderChart();
   }
 
-  function addSample() {
-    const record = makeRecord(Date.now());
-    records.push(record);
-    if (records.length > MAX_RECORDS) records = records.slice(-MAX_RECORDS);
-    if (!zoomed) resetZoom();
-    updateDashboard(record);
-    renderTable();
+  function updateGauge(channel, value) {
+    const valueElement = document.querySelector(`#${channel}Value`);
+    const gaugeElement = document.querySelector(`#${channel}Gauge`);
+    valueElement.textContent = value === null ? '--' : value.toFixed(4);
+    const ratio = value === null ? 0 : Math.max(0, Math.min(1, value / 17));
+    gaugeElement.style.strokeDashoffset = String(361.28 * (1 - ratio));
   }
 
   function svg(tag, attrs = {}, text = '') {
@@ -123,9 +125,11 @@
 
   function ranges() {
     const visible = visibleRecords();
-    let min = Math.min(...visible.map(record => record.y));
-    let max = Math.max(...visible.map(record => record.y));
-    const pad = Math.max((max - min) * .18, .05);
+    const values = visible.flatMap(record => channels.map(channel => record.values[channel]).filter(value => value !== null));
+    if (!values.length) return { min: 0, max: 17 };
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const pad = Math.max((max - min) * 0.18, 0.05);
     return { min: min - pad, max: max + pad };
   }
 
@@ -133,47 +137,57 @@
     return plot.left + (value - viewStart) / Math.max(1, viewEnd - viewStart) * (plot.right - plot.left);
   }
 
-  function scaleY(value, yRange) {
-    return plot.top + (yRange.max - value) / Math.max(.001, yRange.max - yRange.min) * (plot.bottom - plot.top);
+  function scaleY(value, range = ranges()) {
+    return plot.top + (range.max - value) / Math.max(0.001, range.max - range.min) * (plot.bottom - plot.top);
   }
 
   function renderChart() {
-    const yRange = ranges();
+    const range = ranges();
     const visible = visibleRecords();
     el.chart.replaceChildren();
+    el.chartEmpty.hidden = records.length > 0;
 
     for (let i = 0; i < 6; i += 1) {
       const y = plot.top + (plot.bottom - plot.top) * i / 5;
-      const value = yRange.max - (yRange.max - yRange.min) * i / 5;
+      const value = range.max - (range.max - range.min) * i / 5;
       el.chart.append(svg('line', { x1: plot.left, x2: plot.right, y1: y, y2: y, class: 'grid' }));
       el.chart.append(svg('text', { x: plot.left - 10, y: y + 5, 'text-anchor': 'end', class: 'axis-text' }, value.toFixed(2)));
     }
-
     for (let i = 0; i < 6; i += 1) {
       const x = plot.left + (plot.right - plot.left) * i / 5;
       const value = viewStart + (viewEnd - viewStart) * i / 5;
       el.chart.append(svg('line', { x1: x, x2: x, y1: plot.top, y2: plot.bottom, class: 'grid grid-x' }));
       el.chart.append(svg('text', { x, y: 390, 'text-anchor': 'middle', class: 'axis-text' }, beijingTime.format(new Date(value))));
     }
-
     el.chart.append(svg('line', { x1: plot.left, x2: plot.right, y1: plot.bottom, y2: plot.bottom, class: 'axis' }));
     el.chart.append(svg('line', { x1: plot.left, x2: plot.left, y1: plot.top, y2: plot.bottom, class: 'axis' }));
     el.chart.append(svg('text', { x: 18, y: 190, 'text-anchor': 'middle', class: 'axis-title', transform: 'rotate(-90 18 190)' }, '电压 (V)'));
 
-    const linePoints = visible.map(record => `${scaleX(record.x)},${scaleY(record.y, yRange)}`).join(' ');
-    el.chart.append(svg('polyline', { points: linePoints, class: 'chart-line' }));
-    visible.forEach((record, index) => {
-      const circle = svg('circle', {
-        cx: scaleX(record.x), cy: scaleY(record.y, yRange), r: 6,
-        class: `chart-point${index === lastHoverIndex ? ' active' : ''}`,
-        'data-index': index
+    channels.forEach(channel => {
+      const points = visible.filter(record => record.values[channel] !== null).map(record => `${scaleX(record.x)},${scaleY(record.values[channel], range)}`).join(' ');
+      el.chart.append(svg('polyline', { points, class: 'chart-line', stroke: colors[channel] }));
+      visible.forEach((record, index) => {
+        const value = record.values[channel];
+        if (value === null) return;
+        const circle = svg('circle', { cx: scaleX(record.x), cy: scaleY(value, range), r: 5, fill: colors[channel], class: 'chart-point', 'data-index': index, 'data-channel': channel });
+        circle.addEventListener('mouseenter', event => showTooltip(event, record));
+        circle.addEventListener('mousemove', event => showTooltip(event, record));
+        circle.addEventListener('mouseleave', hideTooltip);
+        el.chart.append(circle);
       });
-      el.chart.append(circle);
     });
+    if (hoverPoint) {
+      el.chart.prepend(svg('line', { x1: scaleX(hoverPoint.x), x2: scaleX(hoverPoint.x), y1: plot.top, y2: plot.bottom, class: 'crosshair' }));
+    }
   }
 
   function resetZoom() {
-    if (!records.length) return;
+    if (!records.length) {
+      viewStart = Date.now() - SAMPLE_MS;
+      viewEnd = Date.now();
+      renderChart();
+      return;
+    }
     viewStart = records[0].x;
     viewEnd = records[records.length - 1].x;
     if (viewEnd - viewStart < SAMPLE_MS) {
@@ -197,66 +211,40 @@
     return { start, end };
   }
 
-  function svgPointer(event) {
-    const rect = el.chart.getBoundingClientRect();
-    return {
-      x: (event.clientX - rect.left) / rect.width * 1000,
-      y: (event.clientY - rect.top) / rect.height * 410,
-      rect
-    };
-  }
-
-  function showNearestPoint(event) {
-    const pointer = svgPointer(event);
-    const yRange = ranges();
-    const visible = visibleRecords();
-    let nearest = null;
-    visible.forEach((record, index) => {
-      const dx = scaleX(record.x) - pointer.x;
-      const dy = scaleY(record.y, yRange) - pointer.y;
-      const distance = Math.hypot(dx, dy);
-      if (!nearest || distance < nearest.distance) nearest = { record, index, distance, x: scaleX(record.x), y: scaleY(record.y, yRange) };
-    });
-    if (!nearest || nearest.distance > 16) { hideTooltip(); return; }
-
-    lastHoverIndex = nearest.index;
+  function showTooltip(event, record) {
+    hoverPoint = record;
     renderChart();
-    el.chart.prepend(svg('line', { x1: nearest.x, x2: nearest.x, y1: plot.top, y2: plot.bottom, class: 'crosshair' }));
-    el.chart.prepend(svg('line', { x1: plot.left, x2: plot.right, y1: nearest.y, y2: nearest.y, class: 'crosshair' }));
-
     const wrapRect = el.chartWrap.getBoundingClientRect();
     const localX = event.clientX - wrapRect.left;
     const localY = event.clientY - wrapRect.top;
-    el.tooltip.innerHTML = `<div><span>横坐标</span>${beijingDateTime.format(new Date(nearest.record.x))}</div><div><span>纵坐标</span>${nearest.record.y.toFixed(4)} V</div>`;
+    el.tooltip.innerHTML = `<div><span>采样时间</span>${beijingDateTime.format(new Date(record.x))}</div>${channels.map(channel => `<div><span>${channel}</span>${record.values[channel] === null ? '--' : record.values[channel].toFixed(4) + ' V'}</div>`).join('')}`;
     el.tooltip.hidden = false;
     const width = 235;
     el.tooltip.style.left = `${Math.max(8, Math.min(wrapRect.width - width - 8, localX + 14))}px`;
-    el.tooltip.style.top = `${Math.max(8, Math.min(wrapRect.height - 76, localY - 70))}px`;
+    el.tooltip.style.top = `${Math.max(8, Math.min(wrapRect.height - 110, localY - 90))}px`;
   }
 
   function hideTooltip() {
-    if (lastHoverIndex === -1 && el.tooltip.hidden) return;
-    lastHoverIndex = -1;
+    hoverPoint = null;
     el.tooltip.hidden = true;
-    if (records.length) renderChart();
+    renderChart();
   }
 
   function onWheel(event) {
     event.preventDefault();
     event.stopPropagation();
     if (records.length < 2) return;
-    const pointer = svgPointer(event);
-    const ratio = Math.max(0, Math.min(1, (pointer.x - plot.left) / (plot.right - plot.left)));
+    const rect = el.chart.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
     const oldSpan = Math.max(viewEnd - viewStart, SAMPLE_MS);
     const fullSpan = Math.max(records[records.length - 1].x - records[0].x, SAMPLE_MS);
-    const newSpan = Math.max(SAMPLE_MS, Math.min(fullSpan, oldSpan * (event.deltaY < 0 ? .75 : 4 / 3)));
+    const newSpan = Math.max(SAMPLE_MS, Math.min(fullSpan, oldSpan * (event.deltaY < 0 ? 0.75 : 4 / 3)));
     const anchor = viewStart + oldSpan * ratio;
     const next = clampWindow(anchor - newSpan * ratio, anchor + newSpan * (1 - ratio));
     viewStart = next.start;
     viewEnd = next.end;
     zoomed = newSpan < fullSpan - 1;
     hideTooltip();
-    renderChart();
   }
 
   function onPointerDown(event) {
@@ -270,16 +258,14 @@
   }
 
   function onPointerMove(event) {
-    if (!dragging) { showNearestPoint(event); return; }
+    if (!dragging) return;
     const rect = el.chart.getBoundingClientRect();
-    const span = dragEnd - dragStart;
-    const shift = -(event.clientX - dragX) / rect.width * span;
+    const shift = -(event.clientX - dragX) / rect.width * (dragEnd - dragStart);
     const next = clampWindow(dragStart + shift, dragEnd + shift);
     viewStart = next.start;
     viewEnd = next.end;
     zoomed = true;
     hideTooltip();
-    renderChart();
   }
 
   function onPointerUp(event) {
@@ -291,23 +277,30 @@
   function renderTable() {
     const query = el.search.value.trim().toLowerCase();
     const filtered = [...records].reverse().filter(record => {
-      const text = `${beijingDateTime.format(new Date(record.x))} ${record.y.toFixed(4)} ${record.status} ${record.cycleCount}`.toLowerCase();
+      const values = channels.map(channel => record.values[channel] === null ? '--' : record.values[channel].toFixed(4)).join(' ');
+      const text = `${beijingDateTime.format(new Date(record.x))} ${values} ${record.status} ${record.cycleCount}`.toLowerCase();
       return !query || text.includes(query);
     });
     el.recordsBody.replaceChildren();
     if (!filtered.length) {
       const row = document.createElement('tr');
       const cell = document.createElement('td');
-      cell.colSpan = 4;
+      cell.colSpan = 6;
       cell.className = 'empty-row';
-      cell.textContent = '没有匹配的记录';
+      cell.textContent = records.length ? '没有匹配的记录' : '暂无真实采样数据';
       row.append(cell);
       el.recordsBody.append(row);
       return;
     }
     filtered.forEach(record => {
       const row = document.createElement('tr');
-      [beijingDateTime.format(new Date(record.x)), record.y.toFixed(4), record.status, record.cycleCount].forEach(value => {
+      const values = [
+        beijingDateTime.format(new Date(record.x)),
+        ...channels.map(channel => record.values[channel] === null ? '--' : record.values[channel].toFixed(4)),
+        record.status,
+        record.cycleCount
+      ];
+      values.forEach(value => {
         const cell = document.createElement('td');
         cell.textContent = value;
         row.append(cell);
@@ -337,11 +330,15 @@
   el.chart.addEventListener('pointermove', onPointerMove);
   el.chart.addEventListener('pointerup', onPointerUp);
   el.chart.addEventListener('pointercancel', onPointerUp);
-  el.chart.addEventListener('pointerleave', event => { if (dragging) onPointerUp(event); hideTooltip(); });
   el.chart.addEventListener('dblclick', resetZoom);
 
-  seedRecords();
+  resetZoom();
+  updateDashboard(null);
+  renderTable();
   updateClock();
   setInterval(updateClock, 1000);
-  setInterval(addSample, SAMPLE_MS);
+
+  if (Array.isArray(window.__RS485_INITIAL_DATA__)) {
+    window.__RS485_INITIAL_DATA__.forEach(pushBatterySample);
+  }
 })();
