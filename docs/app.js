@@ -2,9 +2,16 @@
   'use strict';
 
   const SAMPLE_MS = 5_000;
-  const MAX_RECORDS = 720;
-  const HISTORY_PAGE_SIZE = 100;
+  const TABLE_RECORD_LIMIT = 720;
+  const CHART_POINT_LIMIT = 1_200;
+  const HISTORY_PAGE_SIZE = 1_000;
   const HISTORY_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+  const HISTORY_MAX_RECORDS = Math.ceil(HISTORY_LOOKBACK_MS / SAMPLE_MS);
+  const HISTORY_OVERLAP_MS = 60_000;
+  const HISTORY_DB_NAME = 'rs485-battery-history-v1';
+  const HISTORY_STORE_NAME = 'samples';
+  const HISTORY_META_STORE_NAME = 'meta';
+  const LEGACY_HISTORY_KEY = 'rs485-history-v1';
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const plot = { left: 68, right: 980, top: 18, bottom: 360 };
   const colors = { CH1: '#29b6f6', CH2: '#42d392', CH3: '#ffa726' };
@@ -40,6 +47,9 @@
   };
 
   let records = [];
+  const recordsByTime = new Map();
+  let historyDatabasePromise = null;
+  let initialCloudHistoryLoaded = false;
   let viewStart = 0;
   let viewEnd = 0;
   let zoomed = false;
@@ -177,53 +187,155 @@
     };
   }
 
-  function restoreRecords() {
+  function normalizeStoredRecord(item) {
+    if (!item || typeof item !== 'object') return null;
+    const values = Object.fromEntries(channels.map(channel => [channel, numberOrNull(item.values && item.values[channel])]));
+    const x = numberOrNull(item.x ?? item.timestamp ?? item.time);
+    return x !== null && channels.some(channel => values[channel] !== null)
+      ? { x, values, status: item.status || '--', cycleCount: item.cycleCount ?? '--' }
+      : null;
+  }
+
+  function openHistoryDatabase() {
+    if (!('indexedDB' in window)) return Promise.reject(new Error('当前浏览器不支持本地历史数据库'));
+    if (!historyDatabasePromise) {
+      historyDatabasePromise = new Promise((resolve, reject) => {
+        const request = window.indexedDB.open(HISTORY_DB_NAME, 1);
+        request.onupgradeneeded = () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains(HISTORY_STORE_NAME)) {
+            database.createObjectStore(HISTORY_STORE_NAME, { keyPath: 'x' });
+          }
+          if (!database.objectStoreNames.contains(HISTORY_META_STORE_NAME)) {
+            database.createObjectStore(HISTORY_META_STORE_NAME, { keyPath: 'key' });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+    return historyDatabasePromise;
+  }
+
+  async function readHistoryDatabase() {
+    const database = await openHistoryDatabase();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction([HISTORY_STORE_NAME, HISTORY_META_STORE_NAME], 'readonly');
+      const recordsRequest = transaction.objectStore(HISTORY_STORE_NAME).getAll();
+      const metaRequest = transaction.objectStore(HISTORY_META_STORE_NAME).get('initial-cloud-history-loaded');
+      let savedRecords = [];
+      let savedMeta = null;
+      recordsRequest.onsuccess = () => { savedRecords = recordsRequest.result || []; };
+      metaRequest.onsuccess = () => { savedMeta = metaRequest.result || null; };
+      transaction.oncomplete = () => resolve({ records: savedRecords, initialCloudHistoryLoaded: Boolean(savedMeta && savedMeta.value) });
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('读取历史数据库失败'));
+    });
+  }
+
+  async function persistRecords(items) {
+    if (!items || !items.length) return;
     try {
-      const saved = JSON.parse(window.localStorage.getItem('rs485-history-v1') || '[]');
-      if (!Array.isArray(saved)) return;
-      records = saved.map(item => {
-        const values = Object.fromEntries(channels.map(channel => [channel, numberOrNull(item.values && item.values[channel])]));
-        const x = numberOrNull(item.x || item.timestamp || item.time);
-        return x !== null && channels.some(channel => values[channel] !== null)
-          ? { x, values, status: item.status || '--', cycleCount: item.cycleCount ?? '--' }
-          : null;
-      }).filter(Boolean).sort((a, b) => a.x - b.x).slice(-MAX_RECORDS);
-      if (records.length) {
-        resetZoom();
-        updateDashboard(records[records.length - 1]);
-        renderTable();
-      }
+      const database = await openHistoryDatabase();
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction(HISTORY_STORE_NAME, 'readwrite');
+        const store = transaction.objectStore(HISTORY_STORE_NAME);
+        const unique = new Map(items.map(item => [item.x, item]));
+        unique.forEach(item => store.put(item));
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error('保存历史记录失败'));
+      });
     } catch (_) {
-      records = [];
+      try {
+        window.localStorage.setItem(LEGACY_HISTORY_KEY, JSON.stringify(records.slice(-TABLE_RECORD_LIMIT)));
+      } catch (_) {
+        // IndexedDB 不可用时仍显示当前页数据，但无法保证跨页面保存。
+      }
     }
   }
 
-  function persistRecords() {
+  async function saveHistoryMetadata(key, value) {
     try {
-      window.localStorage.setItem('rs485-history-v1', JSON.stringify(records));
+      const database = await openHistoryDatabase();
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction(HISTORY_META_STORE_NAME, 'readwrite');
+        transaction.objectStore(HISTORY_META_STORE_NAME).put({ key, value });
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error('保存历史状态失败'));
+      });
     } catch (_) {
-      // 浏览器禁用 localStorage 时仍保留当前页面的实时曲线。
+      // 历史回补状态无法保存时，下次打开仍会再次检查云端历史。
+    }
+  }
+
+  async function restoreRecords() {
+    let savedRecords = [];
+    let databaseState = null;
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(LEGACY_HISTORY_KEY) || '[]');
+      if (Array.isArray(saved)) savedRecords = saved.map(normalizeStoredRecord).filter(Boolean);
+    } catch (_) {
+      savedRecords = [];
+    }
+    try {
+      databaseState = await readHistoryDatabase();
+      initialCloudHistoryLoaded = databaseState.initialCloudHistoryLoaded;
+      savedRecords.push(...databaseState.records.map(normalizeStoredRecord).filter(Boolean));
+    } catch (_) {
+      // IndexedDB 不可用时尝试恢复旧版 localStorage 历史。
+    }
+
+    recordsByTime.clear();
+    records = [];
+    savedRecords.forEach(record => {
+      const existing = recordsByTime.get(record.x);
+      if (existing) {
+        channels.forEach(channel => {
+          if (record.values[channel] !== null) existing.values[channel] = record.values[channel];
+        });
+        if (record.status && record.status !== '--') existing.status = record.status;
+        if (record.cycleCount !== '--') existing.cycleCount = record.cycleCount;
+      } else {
+        records.push(record);
+        recordsByTime.set(record.x, record);
+      }
+    });
+    records.sort((a, b) => a.x - b.x);
+    if (databaseState && databaseState.records.length === 0 && savedRecords.length) {
+      persistRecords(savedRecords);
+    }
+    if (records.length) {
+      resetZoom();
+      updateDashboard(records[records.length - 1]);
+      renderTable();
     }
   }
 
   function upsertRecord(record) {
-    const existing = records.find(item => item.x === record.x);
+    const existing = recordsByTime.get(record.x);
     if (existing) {
-      existing.values = { ...existing.values, ...record.values };
+      channels.forEach(channel => {
+        if (record.values[channel] !== null) existing.values[channel] = record.values[channel];
+      });
       if (record.status && record.status !== '--') existing.status = record.status;
       if (record.cycleCount !== undefined && record.cycleCount !== '--') existing.cycleCount = record.cycleCount;
+      return existing;
     } else {
       records.push(record);
+      recordsByTime.set(record.x, record);
+      return record;
     }
-    records.sort((a, b) => a.x - b.x);
-    if (records.length > MAX_RECORDS) records = records.slice(-MAX_RECORDS);
   }
 
   function pushBatterySample(sample) {
     const record = normalizeSample(sample);
     if (!record) return false;
-    upsertRecord(record);
-    persistRecords();
+    const latestBeforeUpdate = records.length ? records[records.length - 1].x : 0;
+    const storedRecord = upsertRecord(record);
+    if (record.x < latestBeforeUpdate) records.sort((a, b) => a.x - b.x);
+    persistRecords([storedRecord]);
     if (!zoomed) resetZoom();
     updateDashboard(record);
     renderTable();
@@ -231,23 +343,22 @@
   }
 
   function mergeHistoricalSamples(samples) {
+    const changedRecords = [];
     samples.forEach(sample => {
       const record = normalizeSample(sample);
-      if (record) upsertRecord(record);
+      if (record) changedRecords.push(upsertRecord(record));
     });
     if (!records.length) return;
-    persistRecords();
+    records.sort((a, b) => a.x - b.x);
+    persistRecords(changedRecords);
     if (!zoomed) resetZoom();
     updateDashboard(records[records.length - 1]);
     renderTable();
   }
 
-  async function fetchPropertyHistory(identifier) {
-    const results = [];
-    const endTime = Date.now();
-    const startTime = endTime - HISTORY_LOOKBACK_MS;
+  async function fetchPropertyHistory(identifier, startTime, endTime, onRecords) {
     const base = String(dataConfig.apiBase || defaultDataConfig.apiBase).replace(/\/$/, '');
-    for (let offset = 0; offset < MAX_RECORDS; offset += HISTORY_PAGE_SIZE) {
+    for (let offset = 0; offset < HISTORY_MAX_RECORDS; offset += HISTORY_PAGE_SIZE) {
       const query = new URLSearchParams({
         product_id: dataConfig.productId,
         device_name: dataConfig.deviceName,
@@ -268,22 +379,23 @@
         throw new Error(body.msg || `HTTP ${response.status}`);
       }
       const list = body.data.list;
-      results.push(...list);
+      onRecords(list);
       if (list.length < HISTORY_PAGE_SIZE) break;
     }
-    return results.slice(0, MAX_RECORDS);
   }
 
   async function fetchOneNetHistory() {
     if (!dataConfig.authorization) return;
     setLiveState('正在加载历史…');
     try {
-      const histories = await Promise.all(channels.map(async channel => ({
-        channel,
-        list: await fetchPropertyHistory(channel)
-      })));
+      const endTime = Date.now();
+      const earliestTime = endTime - HISTORY_LOOKBACK_MS;
+      const latestStoredTime = records.length ? records[records.length - 1].x : 0;
+      const startTime = initialCloudHistoryLoaded && latestStoredTime
+        ? Math.max(earliestTime, latestStoredTime - HISTORY_OVERLAP_MS)
+        : earliestTime;
       const merged = new Map();
-      histories.forEach(({ channel, list }) => {
+      await Promise.all(channels.map(channel => fetchPropertyHistory(channel, startTime, endTime, list => {
         list.forEach(item => {
           const timestamp = numberOrNull(item.time);
           const value = numberOrNull(item.value);
@@ -297,9 +409,11 @@
           record.channels[channel] = value;
           merged.set(timestamp, record);
         });
-      });
+      })));
       mergeHistoricalSamples([...merged.values()].sort((a, b) => a.timestamp - b.timestamp));
-      if (records.length) setLiveState(`已加载 ${records.length} 条历史记录`);
+      initialCloudHistoryLoaded = true;
+      await saveHistoryMetadata('initial-cloud-history-loaded', true);
+      if (records.length) setLiveState(`已恢复 ${records.length} 条历史记录`);
     } catch (error) {
       // 历史查询失败不应阻止最新值轮询/本地历史显示
       setLiveState('历史加载失败，继续实时读取', true);
@@ -346,7 +460,27 @@
 
   function visibleRecords() {
     const visible = records.filter(record => record.x >= viewStart && record.x <= viewEnd);
-    return visible.length ? visible : records.slice(-1);
+    if (visible.length <= CHART_POINT_LIMIT) return visible.length ? visible : records.slice(-1);
+
+    const bucketCount = Math.floor((CHART_POINT_LIMIT - 2) / (channels.length * 2));
+    const selected = new Set([0, visible.length - 1]);
+    for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+      const start = Math.floor(bucket * visible.length / bucketCount);
+      const end = Math.max(start + 1, Math.floor((bucket + 1) * visible.length / bucketCount));
+      channels.forEach(channel => {
+        let minIndex = -1;
+        let maxIndex = -1;
+        for (let index = start; index < end; index += 1) {
+          const value = visible[index].values[channel];
+          if (value === null) continue;
+          if (minIndex < 0 || value < visible[minIndex].values[channel]) minIndex = index;
+          if (maxIndex < 0 || value > visible[maxIndex].values[channel]) maxIndex = index;
+        }
+        if (minIndex >= 0) selected.add(minIndex);
+        if (maxIndex >= 0) selected.add(maxIndex);
+      });
+    }
+    return [...selected].sort((a, b) => a - b).map(index => visible[index]);
   }
 
   function ranges() {
@@ -500,7 +634,7 @@
 
   function renderTable() {
     const query = el.search.value.trim().toLowerCase();
-    const filtered = [...records].reverse().filter(record => {
+    const filtered = records.slice(-TABLE_RECORD_LIMIT).reverse().filter(record => {
       const values = channels.map(channel => record.values[channel] === null ? '--' : record.values[channel].toFixed(4)).join(' ');
       const text = `${beijingDateTime.format(new Date(record.x))} ${values} ${record.status} ${record.cycleCount}`.toLowerCase();
       return !query || text.includes(query);
@@ -557,23 +691,24 @@
   el.chart.addEventListener('pointercancel', onPointerUp);
   el.chart.addEventListener('dblclick', resetZoom);
 
-  restoreRecords();
-  if (!records.length) {
-    resetZoom();
-    updateDashboard(null);
-    renderTable();
-  }
+  const historyReady = restoreRecords().then(() => {
+    if (!records.length) {
+      resetZoom();
+      updateDashboard(null);
+      renderTable();
+    }
+
+    if (Array.isArray(window.__RS485_INITIAL_DATA__)) {
+      window.__RS485_INITIAL_DATA__.forEach(pushBatterySample);
+    }
+
+    if (dataConfig.authorization) {
+      fetchOneNetHistory().then(fetchOneNetSample, fetchOneNetSample);
+    } else {
+      fetchOneNetSample();
+    }
+  });
   updateClock();
   setInterval(updateClock, 1000);
-
-  if (Array.isArray(window.__RS485_INITIAL_DATA__)) {
-    window.__RS485_INITIAL_DATA__.forEach(pushBatterySample);
-  }
-
-  if (dataConfig.authorization) {
-    fetchOneNetHistory().then(fetchOneNetSample, fetchOneNetSample);
-  } else {
-    fetchOneNetSample();
-  }
-  setInterval(fetchOneNetSample, SAMPLE_MS);
+  setInterval(() => { historyReady.then(fetchOneNetSample); }, SAMPLE_MS);
 })();
