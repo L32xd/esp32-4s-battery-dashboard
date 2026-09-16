@@ -4,6 +4,9 @@
   const SAMPLE_MS = 5_000;
   const TABLE_RECORD_LIMIT = 720;
   const CHART_POINT_LIMIT = 1_200;
+  const VOLTAGE_AXIS_MIN = 10.8;
+  const VOLTAGE_AXIS_MAX = 16.8;
+  const VOLTAGE_INVALID_MAX = 0.1;
   const HISTORY_PAGE_SIZE = 1_000;
   const HISTORY_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
   const HISTORY_MAX_RECORDS = Math.ceil(HISTORY_LOOKBACK_MS / SAMPLE_MS);
@@ -76,6 +79,12 @@
     return Number.isFinite(number) ? number : null;
   }
 
+  // DAM 在未接通或读数无效时可能上报 0；它不是 4S 电池的有效电压。
+  function voltageOrNull(value) {
+    const number = numberOrNull(value);
+    return number !== null && number >= VOLTAGE_INVALID_MAX && number <= 25 ? number : null;
+  }
+
   function loadDataConfig() {
     try {
       const saved = JSON.parse(window.localStorage.getItem(CONFIG_STORAGE_KEY) || '{}');
@@ -95,10 +104,10 @@
     el.liveBadge.style.borderColor = error ? '#8f4650' : '';
   }
 
-  function readProperty(properties, names) {
+  function readVoltageProperty(properties, names) {
     for (const name of names) {
       const item = properties[name];
-      const value = numberOrNull(item && item.value);
+      const value = voltageOrNull(item && item.value);
       if (value !== null) return { value, time: numberOrNull(item.time) };
     }
     return { value: null, time: null };
@@ -130,7 +139,7 @@
 
       const properties = Object.fromEntries(body.data.map(item => [item.identifier, item]));
       const values = Object.fromEntries(channels.map(channel => {
-        const item = readProperty(properties, [channel, channel.toLowerCase(), `${channel}_V`]);
+        const item = readVoltageProperty(properties, [channel, channel.toLowerCase(), `${channel}_V`]);
         return [channel, item];
       }));
       const valid = Object.values(values).filter(item => item.value !== null);
@@ -176,7 +185,7 @@
   function normalizeSample(sample) {
     if (!sample || typeof sample !== 'object') return null;
     const source = sample.channels && typeof sample.channels === 'object' ? sample.channels : sample;
-    const values = Object.fromEntries(channels.map(channel => [channel, numberOrNull(source[channel])]));
+    const values = Object.fromEntries(channels.map(channel => [channel, voltageOrNull(source[channel])]));
     if (!channels.some(channel => values[channel] !== null)) return null;
     const timestamp = numberOrNull(sample.timestamp || sample.time) || Date.now();
     return {
@@ -189,7 +198,7 @@
 
   function normalizeStoredRecord(item) {
     if (!item || typeof item !== 'object') return null;
-    const values = Object.fromEntries(channels.map(channel => [channel, numberOrNull(item.values && item.values[channel])]));
+    const values = Object.fromEntries(channels.map(channel => [channel, voltageOrNull(item.values && item.values[channel])]));
     const x = numberOrNull(item.x ?? item.timestamp ?? item.time);
     return x !== null && channels.some(channel => values[channel] !== null)
       ? { x, values, status: item.status || '--', cycleCount: item.cycleCount ?? '--' }
@@ -342,7 +351,7 @@
     return true;
   }
 
-  function mergeHistoricalSamples(samples) {
+  async function mergeHistoricalSamples(samples) {
     const changedRecords = [];
     samples.forEach(sample => {
       const record = normalizeSample(sample);
@@ -350,7 +359,7 @@
     });
     if (!records.length) return;
     records.sort((a, b) => a.x - b.x);
-    persistRecords(changedRecords);
+    await persistRecords(changedRecords);
     if (!zoomed) resetZoom();
     updateDashboard(records[records.length - 1]);
     renderTable();
@@ -398,7 +407,7 @@
       await Promise.all(channels.map(channel => fetchPropertyHistory(channel, startTime, endTime, list => {
         list.forEach(item => {
           const timestamp = numberOrNull(item.time);
-          const value = numberOrNull(item.value);
+          const value = voltageOrNull(item.value);
           if (timestamp === null || value === null) return;
           const record = merged.get(timestamp) || {
             timestamp,
@@ -410,7 +419,7 @@
           merged.set(timestamp, record);
         });
       })));
-      mergeHistoricalSamples([...merged.values()].sort((a, b) => a.timestamp - b.timestamp));
+      await mergeHistoricalSamples([...merged.values()].sort((a, b) => a.timestamp - b.timestamp));
       initialCloudHistoryLoaded = true;
       await saveHistoryMetadata('initial-cloud-history-loaded', true);
       if (records.length) setLiveState(`已恢复 ${records.length} 条历史记录`);
@@ -484,13 +493,26 @@
   }
 
   function ranges() {
-    const visible = visibleRecords();
-    const values = visible.flatMap(record => channels.map(channel => record.values[channel]).filter(value => value !== null));
-    if (!values.length) return { min: 0, max: 17 };
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const pad = Math.max((max - min) * 0.18, 0.05);
-    return { min: min - pad, max: max + pad };
+    return { min: VOLTAGE_AXIS_MIN, max: VOLTAGE_AXIS_MAX };
+  }
+
+  function sampleNumberAtTime(value) {
+    if (!records.length) return 0;
+    let low = 0;
+    let high = records.length - 1;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (records[middle].x < value) low = middle + 1;
+      else high = middle;
+    }
+    if (low === 0) return 1;
+    if (records[low].x === value) return low + 1;
+    const previous = records[low - 1];
+    return Math.abs(previous.x - value) <= Math.abs(records[low].x - value) ? low : low + 1;
+  }
+
+  function formatXAxis(value) {
+    return `#${sampleNumberAtTime(value)}`;
   }
 
   function scaleX(value) {
@@ -498,16 +520,17 @@
   }
 
   function scaleY(value, range = ranges()) {
-    return plot.top + (range.max - value) / Math.max(0.001, range.max - range.min) * (plot.bottom - plot.top);
+    const bounded = Math.max(range.min, Math.min(range.max, value));
+    return plot.top + (range.max - bounded) / Math.max(0.001, range.max - range.min) * (plot.bottom - plot.top);
   }
 
   function renderChart() {
     const range = ranges();
     const visible = visibleRecords();
     el.chart.replaceChildren();
-    for (let i = 0; i < 6; i += 1) {
-      const y = plot.top + (plot.bottom - plot.top) * i / 5;
-      const value = range.max - (range.max - range.min) * i / 5;
+    for (let i = 0; i < 7; i += 1) {
+      const y = plot.top + (plot.bottom - plot.top) * i / 6;
+      const value = range.max - (range.max - range.min) * i / 6;
       el.chart.append(svg('line', { x1: plot.left, x2: plot.right, y1: y, y2: y, class: 'grid' }));
       el.chart.append(svg('text', { x: plot.left - 10, y: y + 5, 'text-anchor': 'end', class: 'axis-text' }, value.toFixed(2)));
     }
@@ -515,7 +538,7 @@
       const x = plot.left + (plot.right - plot.left) * i / 5;
       const value = viewStart + (viewEnd - viewStart) * i / 5;
       el.chart.append(svg('line', { x1: x, x2: x, y1: plot.top, y2: plot.bottom, class: 'grid grid-x' }));
-      el.chart.append(svg('text', { x, y: 390, 'text-anchor': 'middle', class: 'axis-text' }, beijingTime.format(new Date(value))));
+      el.chart.append(svg('text', { x, y: 390, 'text-anchor': 'middle', class: 'axis-text' }, formatXAxis(value)));
     }
     el.chart.append(svg('line', { x1: plot.left, x2: plot.right, y1: plot.bottom, y2: plot.bottom, class: 'axis' }));
     el.chart.append(svg('line', { x1: plot.left, x2: plot.left, y1: plot.top, y2: plot.bottom, class: 'axis' }));
