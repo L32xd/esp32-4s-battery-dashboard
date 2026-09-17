@@ -72,6 +72,10 @@
     timeZone: 'Asia/Shanghai', hour12: false,
     hour: '2-digit', minute: '2-digit', second: '2-digit'
   });
+  const xAxisDateTime = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', hour12: false,
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+  });
 
   function numberOrNull(value) {
     if (value === null || value === undefined || value === '') return null;
@@ -496,23 +500,12 @@
     return { min: VOLTAGE_AXIS_MIN, max: VOLTAGE_AXIS_MAX };
   }
 
-  function sampleNumberAtTime(value) {
-    if (!records.length) return 0;
-    let low = 0;
-    let high = records.length - 1;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      if (records[middle].x < value) low = middle + 1;
-      else high = middle;
-    }
-    if (low === 0) return 1;
-    if (records[low].x === value) return low + 1;
-    const previous = records[low - 1];
-    return Math.abs(previous.x - value) <= Math.abs(records[low].x - value) ? low : low + 1;
-  }
-
   function formatXAxis(value) {
-    return `#${sampleNumberAtTime(value)}`;
+    const span = Math.max(viewEnd - viewStart, SAMPLE_MS);
+    const label = span > 24 * 60 * 60 * 1000
+      ? xAxisDateTime.format(new Date(value))
+      : beijingTime.format(new Date(value));
+    return label.replace(/\//g, '-');
   }
 
   function scaleX(value) {
